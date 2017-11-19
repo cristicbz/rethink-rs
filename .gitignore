@@ -1,3 +1,4 @@
 /target/
+/ql2_proto/target/
 **/*.rs.bk
 Cargo.lock
