@@ -7,7 +7,7 @@ extern crate serde_derive;
 extern crate serde_json;
 
 extern crate byteorder;
-extern crate bufstream;
+extern crate arrayvec;
 #[macro_use]
 extern crate log;
 extern crate ql2_proto;

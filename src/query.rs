@@ -4,6 +4,7 @@ SerializeTupleStruct};
 use std::marker::PhantomData;
 use super::enums::term;
 use std::sync::atomic::{AtomicUsize, ATOMIC_USIZE_INIT, Ordering};
+use arrayvec::ArrayVec;
 
 pub struct Expr<OutT, AstT> {
     ast: AstT,
@@ -30,6 +31,13 @@ impl<OutT, AstT: Serialize> Serialize for Expr<OutT, AstT> {
 
 pub fn db<NameT: Serialize>(name: NameT) -> Expr<DbOut, Term<(NameT,), NoOptions>> {
     Expr::raw(Term(term::DB, (name,), NoOptions {}))
+}
+
+impl<OutT, AstT: Serialize> IntoExpr<OutT> for Expr<OutT, AstT> {
+    type Ast = AstT;
+    fn into_expr(self) -> Self {
+        self
+    }
 }
 
 impl<OutT, AstT> Expr<OutT, AstT> {
@@ -127,16 +135,17 @@ impl<OutT, AstT> Expr<OutT, AstT> {
                     ))
         }
 
-    pub fn filter<FilterT: IntoExpr<FunctionOut<(OutT::SequenceItem,), BoolOut>>>(
-        self, filter: FilterT) -> Expr<OutT::SequenceItem, Term<(AstT, FilterT::Ast), NoOptions>>
-        where OutT: IsSequence {
-            Expr::raw(Term(
-                    term::GET_FIELD,
-                    (self.ast, filter.into_expr().ast),
-                    NoOptions {},
-                    ))
+    pub fn filter<ReturnT, FilterT>(self, filter: FilterT) -> Expr<OutT::SequenceItem, Term<(AstT, ReturnT::Ast), NoOptions>>
+        where OutT: IsSequence,
+              FilterT: FnOnce(Var<OutT::SequenceItem>) -> ReturnT,
+              ReturnT: IntoExpr<BoolOut>,{
+                  Expr::raw(Term(
+                          term::FILTER,
+                          (self.ast, (filter)(fresh_var()).into_expr().ast),
+                          NoOptions {},
+                          ))
 
-        }
+              }
 
     pub fn g<KeyT: IntoExpr<StringOut>>(
         self,
@@ -147,6 +156,13 @@ impl<OutT, AstT> Expr<OutT, AstT> {
         {
             self.get_field(key)
         }
+
+    pub fn eq<OtherOutT, OtherT>(self, other: OtherT) -> Expr<BoolOut, Term<(AstT, OtherT::Ast), NoOptions>>
+        where OutT: IsEqualComparable<OtherOutT>,
+              OtherT: IntoExpr<OtherOutT>
+              {
+                  Expr::raw(Term(term::EQ, (self.ast, other.into_expr().ast), NoOptions {}))
+              }
 }
 
 #[derive(Serialize)]
@@ -166,7 +182,7 @@ impl Serialize for Null {
     }
 }
 
-pub trait IntoExpr<OutT>: Serialize {
+pub trait IntoExpr<OutT> {
     type Ast: Serialize;
     fn into_expr(self) -> Expr<OutT, Self::Ast>;
 }
@@ -193,26 +209,34 @@ macro_rules! any_into_expr {
 
 any_into_expr!(StringOut, NumberOut, BoolOut, NullOut, ObjectOut);
 
-pub trait Datum<Out>: Serialize {}
-
-impl<'a, OutT, DatumT: Datum<OutT>> Datum<OutT> for &'a DatumT {}
-
-impl<OutT, DatumT: Datum<OutT>> IntoExpr<OutT> for DatumT {
-    type Ast = Self;
-    fn into_expr(self) -> Expr<OutT, Self> {
-        Expr::raw(self)
-    }
+pub trait Datum: Serialize {
+    type Out;
 }
-
 
 macro_rules! impl_datum {
     ($output:ty, $($rust:ty),+) => {
         $(
-            impl Datum<$output> for $rust {}
+            impl IntoExpr<$output> for $rust {
+                type Ast = Self;
+                fn into_expr(self) -> Expr<$output, Self> {
+                    Expr::raw(self)
+                }
+            }
+            impl<'a> IntoExpr<$output> for &'a $rust {
+                type Ast = Self;
+                fn into_expr(self) -> Expr<$output, Self> {
+                    Expr::raw(self)
+                }
+            }
          )+
     };
     ($output:ty, ref $rust:ty) => {
-        impl<'a> Datum<$output> for &'a $rust {}
+        impl<'a> IntoExpr<$output> for &'a $rust {
+            type Ast = Self;
+            fn into_expr(self) -> Expr<$output, Self> {
+                Expr::raw(self)
+            }
+        }
     };
 }
 
@@ -226,14 +250,20 @@ impl_datum!(NullOut, Null);
 macro_rules! impl_datum_fixed_array {
     ($($len:expr),+) => {
         $(
-            impl<OfOutT, OfT: IntoExpr<OfOutT>> Datum<ArrayOut<OfOutT>> for [OfT; $len] {}
+            impl<OfOutT, OfT: IntoExpr<OfOutT>> IntoExpr<ArrayOut<OfOutT>> for [OfT; $len] {
+                type Ast = ArrayVec<[OfT::Ast; $len]>;
+                fn into_expr(self) -> Expr<ArrayOut<OfOutT>, Self::Ast> {
+                    Expr::raw(
+                        ArrayVec::from(self).into_iter().map(|value| value.into_expr().ast)
+                        .collect())
+                }
+            }
          )+
     }
 }
 
 impl_datum_fixed_array! {
-    1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
-    25, 26, 27, 28, 29, 30, 31, 32
+    0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
@@ -254,40 +284,25 @@ impl Serialize for MaxVal {
     }
 }
 
-#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub struct Var<OutT> {
-    id: usize,
-    _phantom: PhantomData<OutT>,
-}
 
-impl<OutT> Serialize for Var<OutT> {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        (term::VAR, self.id).serialize(serializer)
+impl<OutT> IntoExpr<OutT> for MinVal {
+    type Ast = Self;
+    fn into_expr(self) -> Expr<OutT, Self> {
+        Expr::raw(self)
     }
 }
-
-impl<OutT> Var<OutT> {
-    fn fresh() -> Self {
-        Var {
-            id: NEXT_VAR_ID.fetch_add(1, Ordering::SeqCst),
-            _phantom: PhantomData,
-        }
+impl<OutT> IntoExpr<OutT> for MaxVal {
+    type Ast = Self;
+    fn into_expr(self) -> Expr<OutT, Self> {
+        Expr::raw(self)
     }
 }
-
-impl<OutT> Datum<OutT> for Var<OutT> {}
-
-const NEXT_VAR_ID: AtomicUsize = ATOMIC_USIZE_INIT;
-
-impl<OfT> Datum<OfT> for MinVal {}
-impl<OfT> Datum<OfT> for MaxVal {}
 
 pub enum StringOut {}
 pub struct ArrayOut<OfT>(PhantomData<*const OfT>);
 pub struct SelectionOut<OfT>(PhantomData<*const OfT>);
 pub struct SingleSelectionOut<OfT>(PhantomData<*const OfT>);
 pub struct SequenceOut<OfT>(PhantomData<*const OfT>);
-pub struct FunctionOut<ArgsT, ReturnT>(PhantomData<*const (ArgsT, ReturnT)>);
 pub enum ObjectOut {}
 pub enum BoolOut {}
 pub enum NumberOut {}
@@ -350,14 +365,27 @@ impl IsSequence for AnyOut {
     type SequenceItem = AnyOut;
 }
 
-impl<Arg1T, ReturnT, ReturnOutT, FunctionT> IntoExpr<FunctionOut<(Arg1T,), ReturnOutT>> for FunctionT
-where FunctionT: FnOnce(Var<Arg1T>) -> ReturnT,
-      ReturnT: IntoExpr<ReturnOutT> {
-          type Ast = ReturnT::Ast;
-          fn into_expr(self) -> Expr<FunctionOut<(Arg1T,), ReturnOutT>, Self::Ast> {
-              Expr::raw((self)(Var::fresh()).into_expr().ast)
-          }
-      }
+pub trait IsEqualComparable<WithT> {}
+impl IsEqualComparable<BoolOut> for BoolOut {}
+impl IsEqualComparable<NumberOut> for NumberOut {}
+impl IsEqualComparable<StringOut> for StringOut {}
+impl IsEqualComparable<ObjectOut> for ObjectOut {}
+impl<WithT> IsEqualComparable<WithT> for AnyOut {}
+impl<WithT, OfT> IsEqualComparable<ArrayOut<WithT>> for ArrayOut<OfT>
+where OfT: IsEqualComparable<WithT> {}
+
+impl IsEqualComparable<AnyOut> for BoolOut {}
+impl IsEqualComparable<AnyOut> for NumberOut {}
+impl IsEqualComparable<AnyOut> for StringOut {}
+impl IsEqualComparable<AnyOut> for ObjectOut {}
+impl<OfT> IsEqualComparable<AnyOut> for ArrayOut<OfT> {}
+
+pub type Var<OutT> = Expr<OutT, Term<(usize,), NoOptions>>;
+
+const NEXT_VAR_ID: AtomicUsize = ATOMIC_USIZE_INIT;
+fn fresh_var<OutT>() -> Var<OutT> {
+    Expr::raw(Term(term::VAR, (NEXT_VAR_ID.fetch_add(1, Ordering::SeqCst),), NoOptions {}))
+}
 
 ///// OPTIONS /////
 
