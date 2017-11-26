@@ -1,10 +1,10 @@
 pub use failure::Error;
-use serde::ser::{Impossible, Serialize, SerializeSeq, SerializeTuple, SerializeTupleStruct,
-                 Serializer};
-use std::marker::PhantomData;
-use super::enums::term;
-use std::sync::atomic::{AtomicUsize, Ordering, ATOMIC_USIZE_INIT};
 use arrayvec::ArrayVec;
+use serde::ser::{Serialize, Serializer};
+use std::marker::PhantomData;
+use std::sync::atomic::{AtomicUsize, Ordering, ATOMIC_USIZE_INIT};
+use super::concatenator::Concatenator;
+use super::enums::term;
 
 pub struct Expr<OutT, AstT> {
     ast: AstT,
@@ -29,8 +29,8 @@ impl<OutT, AstT: Serialize> Serialize for Expr<OutT, AstT> {
     }
 }
 
-pub fn db<NameT: Serialize>(name: NameT) -> Expr<DbOut, Term<(NameT,), NoOptions>> {
-    Expr::raw(Term(term::DB, (name,), NoOptions {}))
+pub fn db<NameT: Serialize>(name: NameT) -> Expr<DbOut, Term<(NameT,)>> {
+    Expr::raw(term(term::DB, (name,)))
 }
 
 impl<OutT, AstT: Serialize> IntoExpr<OutT> for Expr<OutT, AstT> {
@@ -44,50 +44,37 @@ impl<OutT, AstT> Expr<OutT, AstT> {
     pub fn table<NameT: IntoExpr<StringOut>>(
         self,
         name: NameT,
-    ) -> Expr<TableOut, Term<(AstT, NameT::Ast), NoOptions>>
+    ) -> Expr<TableOut, Term<(AstT, NameT::Ast)>>
     where
         OutT: IsDb,
     {
-        Expr::raw(Term(
-            term::TABLE,
-            (self.ast, name.into_expr().ast),
-            NoOptions {},
-        ))
+        Expr::raw(term(term::TABLE, (self.ast, name.into_expr().ast)))
     }
 
     pub fn get<KeyOutT: IsKey, KeyT: IntoExpr<KeyOutT>>(
         self,
         key: KeyT,
-    ) -> Expr<SingleSelectionOut<ObjectOut>, Term<(AstT, KeyT::Ast), NoOptions>>
+    ) -> Expr<SingleSelectionOut<ObjectOut>, Term<(AstT, KeyT::Ast)>>
     where
         OutT: IsTable,
     {
-        Expr::raw(Term(
-            term::GET,
-            (self.ast, key.into_expr().ast),
-            NoOptions {},
-        ))
+        Expr::raw(term(term::GET, (self.ast, key.into_expr().ast)))
     }
 
-    pub fn get_all<KeysOutT: IsSequence, KeysT: IntoExpr<KeysOutT>>(
+    pub fn get_all<KeyT: IsKey, KeysT: IntoArgs<KeyT>>(
         self,
         key: KeysT,
-    ) -> Expr<SelectionOut<ObjectOut>, Term<Concatenator<(AstT,), KeysT::Ast>, GetAllOptions>>
+    ) -> Expr<SelectionOut<ObjectOut>, Term<Concatenator<(AstT,), KeysT::ArgsAst>, GetAllOptions>>
     where
         OutT: IsTable,
-        KeysOutT::SequenceItem: IsKey,
     {
-        Expr::raw(Term(
+        Expr::raw(term(
             term::GET_ALL,
-            Concatenator((self.ast,), key.into_expr().ast),
-            GetAllOptions { index: () },
+            Concatenator((self.ast,), key.into_args()),
         ))
     }
 
-    pub fn g<KeyT: IntoExpr<StringOut>>(
-        self,
-        key: KeyT,
-    ) -> Expr<AnyOut, Term<(AstT, KeyT::Ast), NoOptions>>
+    pub fn g<KeyT: IntoExpr<StringOut>>(self, key: KeyT) -> Expr<AnyOut, Term<(AstT, KeyT::Ast)>>
     where
         OutT: IsObjectOrObjectSequence,
     {
@@ -102,14 +89,9 @@ impl<OutT, AstT> Expr<OutT, AstT> {
     where
         OutT: IsTable,
     {
-        Expr::raw(Term(
+        Expr::raw(term(
             term::BETWEEN,
             (self.ast, min.into_expr().ast, max.into_expr().ast),
-            BetweenOptions {
-                index: (),
-                left_bound: (),
-                right_bound: (),
-            },
         ))
     }
 
@@ -138,52 +120,50 @@ impl<OutT, AstT> Expr<OutT, AstT> {
     pub fn get_field<KeyT: IntoExpr<StringOut>>(
         self,
         key: KeyT,
-    ) -> Expr<AnyOut, Term<(AstT, KeyT::Ast), NoOptions>>
+    ) -> Expr<AnyOut, Term<(AstT, KeyT::Ast)>>
     where
         OutT: IsObjectOrObjectSequence,
     {
-        Expr::raw(Term(
-            term::GET_FIELD,
-            (self.ast, key.into_expr().ast),
-            NoOptions {},
-        ))
+        Expr::raw(term(term::GET_FIELD, (self.ast, key.into_expr().ast)))
     }
 
     pub fn filter<ReturnT, FilterT>(
         self,
         filter: FilterT,
-    ) -> Expr<OutT::SequenceItem, Term<(AstT, ReturnT::Ast), NoOptions>>
+    ) -> Expr<OutT, Term<(AstT, FilterT::FunctionAst)>>
     where
         OutT: IsSequence,
-        FilterT: FnOnce(Var<OutT::SequenceItem>) -> ReturnT,
-        ReturnT: IntoExpr<BoolOut>,
+        FilterT: FnOnce(Var<OutT::SequenceItem>) -> ReturnT
+            + IntoFunctionExpr<(OutT::SequenceItem,), BoolOut>,
     {
-        Expr::raw(Term(
+        Expr::raw(term(
             term::FILTER,
-            (self.ast, (filter)(fresh_var()).into_expr().ast),
-            NoOptions {},
+            (self.ast, filter.into_function_expr().ast),
         ))
     }
 
-
-    pub fn eq<OtherOutT, OtherT>(
-        self,
-        other: OtherT,
-    ) -> Expr<BoolOut, Term<(AstT, OtherT::Ast), NoOptions>>
+    pub fn eq<OtherOutT, OtherT>(self, other: OtherT) -> Expr<BoolOut, Term<(AstT, OtherT::Ast)>>
     where
         OutT: IsEqualComparable<OtherOutT>,
         OtherT: IntoExpr<OtherOutT>,
     {
-        Expr::raw(Term(
-            term::EQ,
-            (self.ast, other.into_expr().ast),
-            NoOptions {},
-        ))
+        Expr::raw(term(term::EQ, (self.ast, other.into_expr().ast)))
+    }
+
+    pub fn add<OtherOutT, OtherT>(
+        self,
+        other: OtherT,
+    ) -> Expr<OutT::Output, Term<(AstT, OtherT::Ast)>>
+    where
+        OutT: CanAdd<OtherOutT>,
+        OtherT: IntoExpr<OtherOutT>,
+    {
+        Expr::raw(term(term::ADD, (self.ast, other.into_expr().ast)))
     }
 }
 
 #[derive(Serialize)]
-pub struct Term<ArgsT, OptionsT: Options>(
+pub struct Term<ArgsT, OptionsT: Options = NoOptions>(
     u32,
     ArgsT,
     #[serde(skip_serializing_if = "Options::all_unset")] OptionsT,
@@ -202,6 +182,12 @@ pub trait IntoExpr<OutT> {
     type Ast: Serialize;
     fn into_expr(self) -> Expr<OutT, Self::Ast>;
 }
+
+pub trait IntoArgs<ArgT>: IntoExpr<ArrayOut<ArgT>> {
+    type ArgsAst: Serialize;
+    fn into_args(self) -> Self::ArgsAst;
+}
+
 
 impl<OutT, AstT: Serialize> IntoExpr<ArrayOut<OutT>> for Expr<AnyOut, AstT> {
     type Ast = AstT;
@@ -267,11 +253,16 @@ macro_rules! impl_datum_fixed_array {
     ($($len:expr),+) => {
         $(
             impl<OfOutT, OfT: IntoExpr<OfOutT>> IntoExpr<ArrayOut<OfOutT>> for [OfT; $len] {
-                type Ast = ArrayVec<[OfT::Ast; $len]>;
+                type Ast = Term<ArrayVec<[OfT::Ast; $len]>>;
                 fn into_expr(self) -> Expr<ArrayOut<OfOutT>, Self::Ast> {
-                    Expr::raw(
-                        ArrayVec::from(self).into_iter().map(|value| value.into_expr().ast)
-                        .collect())
+                    Expr::raw(term(term::MAKE_ARRAY, self.into_args()))
+                }
+            }
+
+            impl<OfOutT, OfT: IntoExpr<OfOutT>> IntoArgs<OfOutT> for [OfT; $len] {
+                type ArgsAst = ArrayVec<[OfT::Ast; $len]>;
+                fn into_args(self) -> Self::ArgsAst {
+                    ArrayVec::from(self).into_iter().map(|value| value.into_expr().ast).collect()
                 }
             }
          )+
@@ -319,6 +310,7 @@ pub struct ArrayOut<OfT>(PhantomData<*const OfT>);
 pub struct SelectionOut<OfT>(PhantomData<*const OfT>);
 pub struct SingleSelectionOut<OfT>(PhantomData<*const OfT>);
 pub struct SequenceOut<OfT>(PhantomData<*const OfT>);
+pub struct FunctionOut<ArgsT, ReturnT>(PhantomData<*const (ArgsT, ReturnT)>);
 pub enum ObjectOut {}
 pub enum BoolOut {}
 pub enum NumberOut {}
@@ -399,15 +391,71 @@ impl IsEqualComparable<AnyOut> for StringOut {}
 impl IsEqualComparable<AnyOut> for ObjectOut {}
 impl<OfT> IsEqualComparable<AnyOut> for ArrayOut<OfT> {}
 
-pub type Var<OutT> = Expr<OutT, Term<(usize,), NoOptions>>;
+
+pub trait CanAdd<WithT> {
+    type Output;
+}
+impl CanAdd<NumberOut> for NumberOut {
+    type Output = NumberOut;
+}
+impl CanAdd<StringOut> for StringOut {
+    type Output = StringOut;
+}
+impl<WithT> CanAdd<WithT> for AnyOut {
+    type Output = AnyOut;
+}
+impl<WithT, OfT> CanAdd<ArrayOut<WithT>> for ArrayOut<OfT> {
+    type Output = ArrayOut<AnyOut>;
+}
+
+impl CanAdd<AnyOut> for NumberOut {
+    type Output = AnyOut;
+}
+impl CanAdd<AnyOut> for StringOut {
+    type Output = AnyOut;
+}
+impl<OfT> CanAdd<AnyOut> for ArrayOut<OfT> {
+    type Output = AnyOut;
+}
+
+pub type Var<OutT> = Expr<OutT, Term<(usize,)>>;
 
 const NEXT_VAR_ID: AtomicUsize = ATOMIC_USIZE_INIT;
 fn fresh_var<OutT>() -> Var<OutT> {
-    Expr::raw(Term(
+    Expr::raw(term(
         term::VAR,
         (NEXT_VAR_ID.fetch_add(1, Ordering::SeqCst),),
-        NoOptions {},
     ))
+}
+
+pub trait IntoFunctionExpr<ArgsT, ReturnT> {
+    type FunctionAst;
+
+    fn into_function_expr(self) -> Expr<FunctionOut<ArgsT, ReturnT>, Self::FunctionAst>;
+}
+
+impl<Arg1T, ReturnRawT, ReturnT, FunctionT> IntoFunctionExpr<(Arg1T,), ReturnT> for FunctionT
+where
+    FunctionT: FnOnce(Var<Arg1T>) -> ReturnRawT,
+    ReturnRawT: IntoExpr<ReturnT>,
+{
+    type FunctionAst = Term<(Term<(usize,)>, ReturnRawT::Ast)>;
+
+    fn into_function_expr(self) -> Expr<FunctionOut<(Arg1T,), ReturnT>, Self::FunctionAst> {
+        let var = fresh_var();
+        let var_id = (var.ast.1).0;
+        Expr::raw(term(
+            term::FUNC,
+            (
+                term(term::MAKE_ARRAY, (var_id,)),
+                (self)(var).into_expr().ast,
+            ),
+        ))
+    }
+}
+
+fn term<ArgsT, OptionsT: Default + Options>(term_type: u32, args: ArgsT) -> Term<ArgsT, OptionsT> {
+    Term(term_type, args, OptionsT::default())
 }
 
 ///// OPTIONS /////
@@ -453,7 +501,7 @@ pub enum IndexOption {}
 pub enum LeftBoundOption {}
 pub enum RightBoundOption {}
 
-#[derive(Serialize)]
+#[derive(Serialize, Default)]
 pub struct NoOptions {}
 
 impl Options for NoOptions {
@@ -462,7 +510,7 @@ impl Options for NoOptions {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Default)]
 pub struct GetAllOptions<IndexT: OptionValue = ()> {
     #[serde(skip_serializing_if = "OptionValue::is_unset")] index: IndexT,
 }
@@ -483,7 +531,7 @@ impl<NameT: IntoExpr<StringOut>> WithOption<IndexOption, NameT> for GetAllOption
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Default)]
 pub struct BetweenOptions<
     IndexT: OptionValue = (),
     LeftBoundT: OptionValue = (),
@@ -546,221 +594,5 @@ impl<
             left_bound: self.left_bound,
             right_bound: value.into_expr(),
         }
-    }
-}
-
-pub struct Concatenator<A, B>(A, B);
-
-impl<A: Serialize, B: Serialize> Serialize for Concatenator<A, B> {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut seq = ConcatenatorSerializerSeq(serializer.serialize_seq(None)?);
-        self.0.serialize(ConcatenatorSerializer(&mut seq))?;
-        self.1.serialize(ConcatenatorSerializer(&mut seq))?;
-        seq.actually_end()
-    }
-}
-
-pub struct ConcatenatorSerializer<'a, S: 'a>(&'a mut ConcatenatorSerializerSeq<S>);
-
-impl<'a, S: 'a + SerializeSeq> Serializer for ConcatenatorSerializer<'a, S> {
-    type Ok = ();
-    type Error = S::Error;
-    type SerializeSeq = &'a mut ConcatenatorSerializerSeq<S>;
-    type SerializeTuple = &'a mut ConcatenatorSerializerSeq<S>;
-    type SerializeTupleStruct = &'a mut ConcatenatorSerializerSeq<S>;
-    type SerializeTupleVariant = Impossible<(), S::Error>;
-    type SerializeMap = Impossible<(), S::Error>;
-    type SerializeStruct = Impossible<(), S::Error>;
-    type SerializeStructVariant = Impossible<(), S::Error>;
-
-    fn serialize_seq(self, _: Option<usize>) -> Result<Self::SerializeSeq, Self::Error> {
-        Ok(self.0)
-    }
-
-    fn serialize_tuple(self, _: usize) -> Result<Self::SerializeTuple, Self::Error> {
-        Ok(self.0)
-    }
-    fn serialize_tuple_struct(
-        self,
-        _: &'static str,
-        _: usize,
-    ) -> Result<Self::SerializeTupleStruct, Self::Error> {
-        Ok(self.0)
-    }
-
-    fn serialize_newtype_struct<T: ?Sized>(
-        self,
-        _: &'static str,
-        value: &T,
-    ) -> Result<Self::Ok, Self::Error>
-    where
-        T: Serialize,
-    {
-        value.serialize(self)
-    }
-
-    fn serialize_bool(self, _: bool) -> Result<Self::Ok, Self::Error> {
-        unimplemented!();
-    }
-    fn serialize_i8(self, _: i8) -> Result<Self::Ok, Self::Error> {
-        unimplemented!()
-    }
-    fn serialize_i16(self, _: i16) -> Result<Self::Ok, Self::Error> {
-        unimplemented!()
-    }
-    fn serialize_i32(self, _: i32) -> Result<Self::Ok, Self::Error> {
-        unimplemented!()
-    }
-    fn serialize_i64(self, _: i64) -> Result<Self::Ok, Self::Error> {
-        unimplemented!()
-    }
-    fn serialize_u8(self, _: u8) -> Result<Self::Ok, Self::Error> {
-        unimplemented!()
-    }
-    fn serialize_u16(self, _: u16) -> Result<Self::Ok, Self::Error> {
-        unimplemented!()
-    }
-    fn serialize_u32(self, _: u32) -> Result<Self::Ok, Self::Error> {
-        unimplemented!()
-    }
-    fn serialize_u64(self, _: u64) -> Result<Self::Ok, Self::Error> {
-        unimplemented!()
-    }
-    fn serialize_f32(self, _: f32) -> Result<Self::Ok, Self::Error> {
-        unimplemented!()
-    }
-    fn serialize_f64(self, _: f64) -> Result<Self::Ok, Self::Error> {
-        unimplemented!()
-    }
-    fn serialize_char(self, _: char) -> Result<Self::Ok, Self::Error> {
-        unimplemented!()
-    }
-    fn serialize_str(self, _: &str) -> Result<Self::Ok, Self::Error> {
-        unimplemented!()
-    }
-    fn serialize_bytes(self, _: &[u8]) -> Result<Self::Ok, Self::Error> {
-        unimplemented!()
-    }
-    fn serialize_none(self) -> Result<Self::Ok, Self::Error> {
-        unimplemented!()
-    }
-    fn serialize_some<T: ?Sized>(self, _: &T) -> Result<Self::Ok, Self::Error>
-    where
-        T: Serialize,
-    {
-        unimplemented!()
-    }
-    fn serialize_unit(self) -> Result<Self::Ok, Self::Error> {
-        unimplemented!()
-    }
-    fn serialize_unit_struct(self, _: &'static str) -> Result<Self::Ok, Self::Error> {
-        unimplemented!()
-    }
-    fn serialize_unit_variant(
-        self,
-        _: &'static str,
-        _: u32,
-        _: &'static str,
-    ) -> Result<Self::Ok, Self::Error> {
-        unimplemented!()
-    }
-
-    fn serialize_newtype_variant<T: ?Sized>(
-        self,
-        _: &'static str,
-        _: u32,
-        _: &'static str,
-        _: &T,
-    ) -> Result<Self::Ok, Self::Error>
-    where
-        T: Serialize,
-    {
-        unimplemented!()
-    }
-    fn serialize_tuple_variant(
-        self,
-        _: &'static str,
-        _: u32,
-        _: &'static str,
-        _: usize,
-    ) -> Result<Self::SerializeTupleVariant, Self::Error> {
-        unimplemented!()
-    }
-
-    fn serialize_map(self, _: Option<usize>) -> Result<Self::SerializeMap, Self::Error> {
-        unimplemented!()
-    }
-
-    fn serialize_struct(
-        self,
-        _: &'static str,
-        _: usize,
-    ) -> Result<Self::SerializeStruct, Self::Error> {
-        unimplemented!()
-    }
-    fn serialize_struct_variant(
-        self,
-        _: &'static str,
-        _: u32,
-        _: &'static str,
-        _: usize,
-    ) -> Result<Self::SerializeStructVariant, Self::Error> {
-        unimplemented!()
-    }
-}
-
-pub struct ConcatenatorSerializerSeq<S>(S);
-
-impl<S: SerializeSeq> ConcatenatorSerializerSeq<S> {
-    fn actually_end(self) -> Result<S::Ok, S::Error> {
-        self.0.end()
-    }
-}
-
-impl<'a, S: SerializeSeq> SerializeSeq for &'a mut ConcatenatorSerializerSeq<S> {
-    type Ok = ();
-    type Error = S::Error;
-
-    fn serialize_element<T: ?Sized>(&mut self, value: &T) -> Result<(), Self::Error>
-    where
-        T: Serialize,
-    {
-        self.0.serialize_element(value)
-    }
-
-    fn end(self) -> Result<Self::Ok, Self::Error> {
-        Ok(())
-    }
-}
-
-impl<'a, S: SerializeSeq> SerializeTuple for &'a mut ConcatenatorSerializerSeq<S> {
-    type Ok = ();
-    type Error = S::Error;
-
-    fn serialize_element<T: ?Sized>(&mut self, value: &T) -> Result<(), Self::Error>
-    where
-        T: Serialize,
-    {
-        self.0.serialize_element(value)
-    }
-
-    fn end(self) -> Result<Self::Ok, Self::Error> {
-        Ok(())
-    }
-}
-
-impl<'a, S: SerializeSeq> SerializeTupleStruct for &'a mut ConcatenatorSerializerSeq<S> {
-    type Ok = ();
-    type Error = S::Error;
-
-    fn serialize_field<T: ?Sized>(&mut self, value: &T) -> Result<(), Self::Error>
-    where
-        T: Serialize,
-    {
-        self.0.serialize_element(value)
-    }
-
-    fn end(self) -> Result<Self::Ok, Self::Error> {
-        Ok(())
     }
 }
