@@ -10,16 +10,22 @@ pub struct Expr<OutT, AstT> {
     _phantom: PhantomData<*const OutT>,
 }
 
+/// Construct a ReQL object.
 pub fn expr<OutT, OfT: IntoExpr<OutT>>(of: OfT) -> Expr<OutT, OfT::Ast> {
     of.into_expr()
 }
 
+/// `args` is a special term that’s used to splice an array of arguments into another term. This is
+/// useful when you want to call a variadic term such as getAll with a set of arguments produced at
+/// runtime.
 pub fn args<OutT, OfT: IntoExpr<ArrayOut<OutT>>>(of: OfT) -> Args<OutT, Term<(OfT::Ast,)>> {
     Args {
         ast: term(term::ARGS, (of.into_ast(),)),
         _phantom: PhantomData,
     }
 }
+
+// FIXME: Implement binary.
 
 /// Reference a database.
 pub fn db<NameT: Serialize>(name: NameT) -> Expr<DbOut, Term<(NameT,)>> {
@@ -78,11 +84,11 @@ impl<OutT, AstT> Expr<OutT, AstT> {
     }
 
     /// List all table names in a database. The result is a list of strings.
-    pub fn table_list(self) -> Expr<ArrayOut<StringOut>, Term<(AstT, [u8; 0])>>
+    pub fn table_list(self) -> Expr<ArrayOut<StringOut>, Term<(AstT,)>>
     where
         OutT: IsDb,
     {
-        Expr::raw(term(term::TABLE_LIST, (self.ast, [])))
+        Expr::raw(term(term::TABLE_LIST, (self.ast,)))
     }
 
     /// Create a new secondary index on a table. Secondary indexes improve the speed of many read
@@ -111,11 +117,11 @@ impl<OutT, AstT> Expr<OutT, AstT> {
     }
 
     /// List all the secondary indexes of this table.
-    pub fn index_list(self) -> Expr<ArrayOut<StringOut>, Term<(AstT, [u8; 0])>>
+    pub fn index_list(self) -> Expr<ArrayOut<StringOut>, Term<(AstT,)>>
     where
         OutT: IsDb,
     {
-        Expr::raw(term(term::INDEX_LIST, (self.ast, [])))
+        Expr::raw(term(term::INDEX_LIST, (self.ast,)))
     }
 
     /// Rename an existing secondary index on a table. If the optional argument overwrite is
@@ -205,7 +211,7 @@ impl<OutT, AstT> Expr<OutT, AstT> {
         ))
     }
 
-    // FIXME: Missing replace.
+    // FIXME: Implement replace.
 
     /// Delete one or more documents from a table.
     /// FIXME: Missing delete options.
@@ -226,7 +232,6 @@ impl<OutT, AstT> Expr<OutT, AstT> {
     {
         Expr::raw(term(term::SYNC, (self.ast,)))
     }
-
 
     /// Get a document by primary key.
     pub fn get<KeyOutT: IsString, KeyT: IntoExpr<KeyOutT>>(
@@ -295,23 +300,13 @@ impl<OutT, AstT> Expr<OutT, AstT> {
         Expr::raw(self.ast.with_option(bound))
     }
 
-    pub fn get_field<KeyT: IntoExpr<StringOut>>(
-        self,
-        key: KeyT,
-    ) -> Expr<AnyOut, Term<(AstT, KeyT::Ast)>>
-    where
-        OutT: IsObjectOrObjectSequence,
-    {
-        Expr::raw(term(term::GET_FIELD, (self.ast, key.into_ast())))
-    }
-
-    pub fn g<KeyT: IntoExpr<StringOut>>(self, key: KeyT) -> Expr<AnyOut, Term<(AstT, KeyT::Ast)>>
-    where
-        OutT: IsObjectOrObjectSequence,
-    {
-        self.get_field(key)
-    }
-
+    /// Return all the elements in a sequence for which the given predicate is true. The return
+    /// value of filter will be the same as the input (sequence, stream, or array). Documents can be
+    /// filtered in a variety of ways—ranges, nested values, boolean conditions, and the results of
+    /// anonymous functions.
+    ///
+    /// FIXME: Missing `default` option.
+    /// FIXME: Missing support for filtering with an object.
     pub fn filter<ReturnT, FilterT>(
         self,
         filter: FilterT,
@@ -327,14 +322,193 @@ impl<OutT, AstT> Expr<OutT, AstT> {
         ))
     }
 
-    pub fn eq<OtherOutT, OtherT>(self, other: OtherT) -> Expr<BoolOut, Term<(AstT, OtherT::Ast)>>
+    // FIXME: Implement innerJoin
+    // FIXME: Implement outerJoin
+    // FIXME: Implement eqJoin
+
+    /// Used to 'zip' up the result of a join by merging the 'right' fields into 'left' fields of
+    /// each member of the sequence.
+    pub fn zip(self) -> Expr<ObjectOut, Term<(AstT,)>>
     where
-        OutT: IsEqualComparable<OtherOutT>,
-        OtherT: IntoExpr<OtherOutT>,
+        OutT: IsSequence,
+        OutT::SequenceItem: IsObject,
     {
-        Expr::raw(term(term::EQ, (self.ast, other.into_ast())))
+        Expr::raw(term(term::ZIP, (self.ast,)))
     }
 
+    /// Transform each element of one or more sequences by applying a mapping function to them. If
+    /// map is run with two or more sequences, it will iterate for as many items as there are in the
+    /// shortest sequence.
+    ///
+    /// FIXME: Implement support for multiple sequences.
+    pub fn map<ReturnT, ReturnOutT, MapT>(
+        self,
+        map: MapT,
+    ) -> Expr<OutT::Rebound, Term<(AstT, MapT::FunctionAst)>>
+    where
+        OutT: Rebind<ReturnOutT>,
+        ReturnT: IntoExpr<ReturnOutT>,
+        MapT: FnOnce(Var<OutT::SequenceItem>) -> ReturnT
+            + IntoFunctionExpr<(OutT::SequenceItem,), ReturnOutT>,
+    {
+        Expr::raw(term(term::MAP, (self.ast, map.into_function_expr().ast)))
+    }
+
+    /// Plucks one or more attributes from a sequence of objects, filtering out any objects in the
+    /// sequence that do not have the specified fields. Functionally, this is identical to
+    /// `has_fields` followed by `pluck` on a sequence.
+    pub fn with_fields<SelectorT, ArgsAstT, SelectorsT>(
+        self,
+        selectors: SelectorsT,
+    ) -> Expr<OutT::Rebound, Term<(AstT, ArgsAstT)>>
+    where
+        OutT: Rebind<ObjectOut>,
+        SelectorT: IsSelector,
+        SelectorsT: Into<Args<SelectorT, ArgsAstT>>,
+    {
+        Expr::raw(term(term::WITH_FIELDS, (self.ast, selectors.into().ast)))
+    }
+
+    /// Concatenate one or more elements into a single sequence using a mapping function.
+    pub fn concat_map<ReturnT, ReturnOutT, MapT>(
+        self,
+        concat_map: MapT,
+    ) -> Expr<OutT::Rebound, Term<(AstT, MapT::FunctionAst)>>
+    where
+        OutT: Rebind<ReturnOutT::SequenceItem>,
+        ReturnT: IntoExpr<ReturnOutT>,
+        ReturnOutT: IsSequence,
+        MapT: FnOnce(Var<OutT::SequenceItem>) -> ReturnT
+            + IntoFunctionExpr<(OutT::SequenceItem,), ReturnOutT>,
+    {
+        Expr::raw(term(
+            term::CONCAT_MAP,
+            (self.ast, concat_map.into_function_expr().ast),
+        ))
+    }
+
+    // FIXME: implement order_by
+
+    /// Skip a number of elements from the head of the sequence.
+    pub fn skip<NumT>(self, n: NumT) -> Expr<OutT, Term<(AstT, NumT::Ast)>>
+    where
+        NumT: IntoExpr<NumberOut>,
+        OutT: IsSequence,
+    {
+        Expr::raw(term(term::SKIP, (self.ast, n.into_ast())))
+    }
+
+    /// End the sequence after the given number of elements.
+    pub fn limit<NumT>(self, n: NumT) -> Expr<OutT, Term<(AstT, NumT::Ast)>>
+    where
+        NumT: IntoExpr<NumberOut>,
+        OutT: IsSequence,
+    {
+        Expr::raw(term(term::LIMIT, (self.ast, n.into_ast())))
+    }
+
+    /// Return the elements of a sequence within the specified range.
+    pub fn slice_after<NumT>(self, start: NumT) -> Expr<OutT, Term<(AstT, NumT::Ast)>>
+    where
+        NumT: IntoExpr<NumberOut>,
+        OutT: IsSequence,
+    {
+        Expr::raw(term(term::SLICE, (self.ast, start.into_ast())))
+    }
+
+    /// Return the elements of a sequence within the specified range.
+    /// FIXME: Add left_bound and right_bound options.
+    pub fn slice<StartT, EndT>(
+        self,
+        start: StartT,
+        end: EndT,
+    ) -> Expr<OutT, Term<(AstT, StartT::Ast, EndT::Ast)>>
+    where
+        StartT: IntoExpr<NumberOut>,
+        EndT: IntoExpr<NumberOut>,
+        OutT: IsSequence,
+    {
+        Expr::raw(term(
+            term::SLICE,
+            (self.ast, start.into_ast(), end.into_ast()),
+        ))
+    }
+
+    /// Get the nth element of a sequence, counting from zero. If the argument is negative, count
+    /// from the last element.
+    pub fn nth<NumT>(self, n: NumT) -> Expr<OutT::Select, Term<(AstT, NumT::Ast)>>
+    where
+        NumT: IntoExpr<NumberOut>,
+        OutT: IsSequence,
+    {
+        Expr::raw(term(term::NTH, (self.ast, n.into_ast())))
+    }
+
+    // FIXME: Implement offsets_of.
+    // FIXME: Implement is_empty.
+    // FIXME: Implement union.
+    // FIXME: Implement sample.
+
+    // FIXME: Implement group.
+    // FIXME: Implement ungroup.
+    // FIXME: Implement reduce.
+    // FIXME: Implement fold.
+    // FIXME: Implement sum.
+    // FIXME: Implement avg.
+    // FIXME: Implement min.
+    // FIXME: Implement max.
+    // FIXME: Implement distinct.
+    // FIXME: Implement contains.
+
+    // FIXME: Implement r.row implicit var functions.
+    // FIXME: Implement pluck.
+    // FIXME: Implement without.
+    // FIXME: Implement merge.
+    // FIXME: Implement append.
+    // FIXME: Implement prepend.
+    // FIXME: Implement difference.
+    // FIXME: Implement setInsert.
+    // FIXME: Implement setUnion.
+    // FIXME: Implement setIntersection.
+    // FIXME: Implement setDifference.
+
+    /// Get a single field from an object. If called on a sequence, gets that field from every
+    /// object in the sequence, skipping objects that lack it.
+    pub fn get_field<KeyT: IntoExpr<StringOut>>(
+        self,
+        key: KeyT,
+    ) -> Expr<AnyOut, Term<(AstT, KeyT::Ast)>>
+    where
+        OutT: IsObjectOrObjectSequence,
+    {
+        Expr::raw(term(term::GET_FIELD, (self.ast, key.into_ast())))
+    }
+
+    /// Alias for `get_field`.
+    pub fn g<KeyT: IntoExpr<StringOut>>(self, key: KeyT) -> Expr<AnyOut, Term<(AstT, KeyT::Ast)>>
+    where
+        OutT: IsObjectOrObjectSequence,
+    {
+        self.get_field(key)
+    }
+
+    // FIXME: Implement hasFields
+    // FIXME: Implement insertAt
+    // FIXME: Implement spliceAt
+    // FIXME: Implement deleteAt
+    // FIXME: Implement changeAt
+    // FIXME: Implement keys
+    // FIXME: Implement values
+    // FIXME: Implement literal
+    // FIXME: Implement object
+
+    // FIXME: Implement match
+    // FIXME: Implement split
+    // FIXME: Implement upcase
+    // FIXME: Implement downcase
+
+    /// Sum two or more numbers, or concatenate two or more strings or arrays.
+    /// FIXME: Support more args.
     pub fn add<OtherOutT, OtherT>(
         self,
         other: OtherT,
@@ -345,6 +519,85 @@ impl<OutT, AstT> Expr<OutT, AstT> {
     {
         Expr::raw(term(term::ADD, (self.ast, other.into_ast())))
     }
+
+    // FIXME: Implement sub
+    // FIXME: Implement mul
+    // FIXME: Implement div
+    // FIXME: Implement mod
+    // FIXME: Implement and
+    // FIXME: Implement or
+
+    /// Test if two or more values are equal.
+    /// FIXME: Support more args.
+    pub fn eq<OtherOutT, OtherT>(self, other: OtherT) -> Expr<BoolOut, Term<(AstT, OtherT::Ast)>>
+    where
+        OutT: IsEqualComparable<OtherOutT>,
+        OtherT: IntoExpr<OtherOutT>,
+    {
+        Expr::raw(term(term::EQ, (self.ast, other.into_ast())))
+    }
+
+    /// Test if two or more values are not equal.
+    /// FIXME: Support more args.
+    pub fn ne<OtherOutT, OtherT>(self, other: OtherT) -> Expr<BoolOut, Term<(AstT, OtherT::Ast)>>
+    where
+        OutT: IsEqualComparable<OtherOutT>,
+        OtherT: IntoExpr<OtherOutT>,
+    {
+        Expr::raw(term(term::NE, (self.ast, other.into_ast())))
+    }
+
+    // FIXME: Implement gt
+    // FIXME: Implement ge
+    // FIXME: Implement lt
+    // FIXME: Implement le
+    // FIXME: Implement not
+    // FIXME: Implement random
+    // FIXME: Implement round
+    // FIXME: Implement ceil
+    // FIXME: Implement floor
+
+    // FIXME: Implement now
+    // FIXME: Implement time
+    // FIXME: Implement epochTime
+    // FIXME: Implement iso8601
+    // FIXME: Implement inTimezone
+    // FIXME: Implement timezone
+    // FIXME: Implement during
+    // FIXME: Implement date
+    // FIXME: Implement timeofday
+    // FIXME: Implement year
+    // FIXME: Implement month
+    // FIXME: Implement day
+    // FIXME: Implement dayOfWeek
+    // FIXME: Implement dayOfYear
+    // FIXME: Implement hours
+    // FIXME: Implement minutes
+    // FIXME: Implement seconds
+    // FIXME: Implement to_iso8601
+    // FIXME: Implement toEpochTime
+
+    // FIXME: Implement do
+    // FIXME: Implement branch
+    // FIXME: Implement forEach
+    // FIXME: Implement range
+    // FIXME: Implement error
+    // FIXME: Implement default
+    // FIXME: Implement js
+    // FIXME: Implement coerce_to (potentially as multiple functions)
+    // FIXME: Implement type_of
+    // FIXME: Implement json
+    // FIXME: Implement to_json
+
+    // FIXME: Implement http
+    // FIXME: Implement uuid
+
+    // FIXME: Implement grant
+    // FIXME: Implement config
+    // FIXME: Implement rebalance
+    // FIXME: Implement reconfigure
+    // FIXME: Implement status
+    // FIXME: Implement wait
 }
 
 pub struct Args<OfT, AstT> {
@@ -548,7 +801,7 @@ pub enum StringOut {}
 pub struct ArrayOut<OfT>(PhantomData<*const OfT>);
 pub struct SelectionOut<OfT>(PhantomData<*const OfT>);
 pub struct SingleSelectionOut<OfT>(PhantomData<*const OfT>);
-pub struct SequenceOut<OfT>(PhantomData<*const OfT>);
+pub struct StreamOut<OfT>(PhantomData<*const OfT>);
 pub struct FunctionOut<ArgsT, ReturnT>(PhantomData<*const (ArgsT, ReturnT)>);
 pub enum ObjectOut {}
 pub enum BoolOut {}
@@ -583,11 +836,16 @@ impl IsKey for StringOut {}
 impl IsKey for NumberOut {}
 impl IsKey for AnyOut {}
 
+pub trait IsSelector {}
+impl IsSelector for StringOut {}
+impl IsSelector for ObjectOut {}
+impl IsSelector for AnyOut {}
+
 pub trait IsIndexKey {}
 impl<OfT> IsIndexKey for ArrayOut<OfT> {}
 impl<OfT> IsIndexKey for SelectionOut<OfT> {}
 impl<OfT> IsIndexKey for SingleSelectionOut<OfT> {}
-impl<OfT> IsIndexKey for SequenceOut<OfT> {}
+impl<OfT> IsIndexKey for StreamOut<OfT> {}
 impl IsIndexKey for BoolOut {}
 impl IsIndexKey for NumberOut {}
 impl IsIndexKey for StringOut {}
@@ -598,29 +856,59 @@ pub trait IsObjectOrObjectSequence {}
 impl IsObjectOrObjectSequence for ObjectOut {}
 impl<OfT: IsObject> IsObjectOrObjectSequence for SingleSelectionOut<OfT> {}
 impl<OfT: IsObject> IsObjectOrObjectSequence for SelectionOut<OfT> {}
-impl<OfT: IsObject> IsObjectOrObjectSequence for SequenceOut<OfT> {}
+impl<OfT: IsObject> IsObjectOrObjectSequence for StreamOut<OfT> {}
 impl<OfT: IsObject> IsObjectOrObjectSequence for ArrayOut<OfT> {}
 impl IsObjectOrObjectSequence for TableOut {}
 impl IsObjectOrObjectSequence for AnyOut {}
 
 pub trait IsSequence {
     type SequenceItem;
+    type Select;
+}
+
+pub trait Rebind<ToT>: IsSequence {
+    type Rebound;
 }
 
 impl IsSequence for TableOut {
     type SequenceItem = ObjectOut;
+    type Select = SingleSelectionOut<ObjectOut>;
 }
 
 impl<OfT> IsSequence for ArrayOut<OfT> {
     type SequenceItem = OfT;
+    type Select = OfT;
 }
 
-impl<OfT> IsSequence for SequenceOut<OfT> {
+impl<ToT, OfT> Rebind<ToT> for ArrayOut<OfT> {
+    type Rebound = ArrayOut<ToT>;
+}
+
+impl<OfT> IsSequence for StreamOut<OfT> {
     type SequenceItem = OfT;
+    type Select = OfT;
+}
+
+impl<ToT, OfT> Rebind<ToT> for StreamOut<OfT> {
+    type Rebound = StreamOut<ToT>;
+}
+
+impl<OfT> IsSequence for SelectionOut<OfT> {
+    type SequenceItem = OfT;
+    type Select = SingleSelectionOut<OfT>;
+}
+
+impl<ToT, OfT> Rebind<ToT> for SelectionOut<OfT> {
+    type Rebound = SelectionOut<ToT>;
 }
 
 impl IsSequence for AnyOut {
     type SequenceItem = AnyOut;
+    type Select = SingleSelectionOut<AnyOut>;
+}
+
+impl<ToT> Rebind<ToT> for AnyOut {
+    type Rebound = AnyOut;
 }
 
 pub trait IsEqualComparable<WithT> {}

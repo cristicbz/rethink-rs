@@ -12,6 +12,7 @@ fn run() -> Result<(), Error> {
     println!("{:?}", name);
     Ok(())
 }
+
 fn main() {
     env_logger::init().unwrap();
     if let Err(error) = run() {
