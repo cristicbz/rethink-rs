@@ -5,6 +5,7 @@ use std::marker::PhantomData;
 use std::sync::atomic::{AtomicUsize, Ordering, ATOMIC_USIZE_INIT};
 use super::enums::term;
 
+#[derive(Copy, Clone, Debug)]
 pub struct Expr<OutT, AstT> {
     ast: AstT,
     _phantom: PhantomData<*const OutT>,
@@ -598,8 +599,41 @@ impl<OutT, AstT> Expr<OutT, AstT> {
     // FIXME: Implement reconfigure
     // FIXME: Implement status
     // FIXME: Implement wait
+
+    pub fn as_any(self) -> Expr<AnyOut, AstT> {
+        Expr::raw(self.ast)
+    }
+
+    pub fn as_number(self) -> Expr<NumberOut, AstT>
+    where
+        Self: IntoExpr<NumberOut>,
+    {
+        Expr::raw(self.ast)
+    }
+
+    pub fn as_string(self) -> Expr<StringOut, AstT>
+    where
+        Self: IntoExpr<StringOut>,
+    {
+        Expr::raw(self.ast)
+    }
+
+    pub fn as_bool(self) -> Expr<BoolOut, AstT>
+    where
+        Self: IntoExpr<BoolOut>,
+    {
+        Expr::raw(self.ast)
+    }
+
+    pub fn as_object(self) -> Expr<ObjectOut, AstT>
+    where
+        Self: IntoExpr<ObjectOut>,
+    {
+        Expr::raw(self.ast)
+    }
 }
 
+#[derive(Copy, Clone, Debug)]
 pub struct Args<OfT, AstT> {
     ast: AstT,
     _phantom: PhantomData<*const OfT>,
@@ -636,7 +670,7 @@ impl<OutT, AstT: Serialize> Serialize for Expr<OutT, AstT> {
 impl<OutT, AstT: Serialize> IntoExpr<OutT> for Expr<OutT, AstT> {}
 
 
-#[derive(Serialize)]
+#[derive(Copy, Clone, Debug, Serialize)]
 pub struct Term<ArgsT, OptionsT: Options = NoOptions>(
     u32,
     ArgsT,
@@ -797,21 +831,35 @@ impl IntoAst for MaxVal {
 impl<OutT> IntoExpr<OutT> for MinVal {}
 impl<OutT> IntoExpr<OutT> for MaxVal {}
 
+#[derive(Copy, Clone, Debug)]
 pub enum StringOut {}
+#[derive(Copy, Clone, Debug)]
 pub struct ArrayOut<OfT>(PhantomData<*const OfT>);
+#[derive(Copy, Clone, Debug)]
 pub struct SelectionOut<OfT>(PhantomData<*const OfT>);
+#[derive(Copy, Clone, Debug)]
 pub struct SingleSelectionOut<OfT>(PhantomData<*const OfT>);
+#[derive(Copy, Clone, Debug)]
 pub struct StreamOut<OfT>(PhantomData<*const OfT>);
+#[derive(Copy, Clone, Debug)]
 pub struct FunctionOut<ArgsT, ReturnT>(PhantomData<*const (ArgsT, ReturnT)>);
+#[derive(Copy, Clone, Debug)]
 pub enum ObjectOut {}
+#[derive(Copy, Clone, Debug)]
 pub enum BoolOut {}
+#[derive(Copy, Clone, Debug)]
 pub enum NumberOut {}
+#[derive(Copy, Clone, Debug)]
 pub enum NullOut {}
+#[derive(Copy, Clone, Debug)]
 pub enum AnyOut {}
 
+#[derive(Copy, Clone, Debug)]
 pub enum TableOut {}
+#[derive(Copy, Clone, Debug)]
 pub enum DbOut {}
 
+#[derive(Copy, Clone, Debug)]
 pub struct NullOr<OfT>(PhantomData<*const OfT>);
 
 pub trait IsDb {}
@@ -867,12 +915,16 @@ pub trait IsSequence {
 }
 
 pub trait Rebind<ToT>: IsSequence {
-    type Rebound;
+    type Rebound: IsSequence<SequenceItem = ToT>;
 }
 
 impl IsSequence for TableOut {
     type SequenceItem = ObjectOut;
     type Select = SingleSelectionOut<ObjectOut>;
+}
+
+impl<ToT> Rebind<ToT> for TableOut {
+    type Rebound = StreamOut<ToT>;
 }
 
 impl<OfT> IsSequence for ArrayOut<OfT> {
@@ -899,7 +951,7 @@ impl<OfT> IsSequence for SelectionOut<OfT> {
 }
 
 impl<ToT, OfT> Rebind<ToT> for SelectionOut<OfT> {
-    type Rebound = SelectionOut<ToT>;
+    type Rebound = StreamOut<ToT>;
 }
 
 impl IsSequence for AnyOut {
@@ -908,7 +960,7 @@ impl IsSequence for AnyOut {
 }
 
 impl<ToT> Rebind<ToT> for AnyOut {
-    type Rebound = AnyOut;
+    type Rebound = StreamOut<ToT>;
 }
 
 pub trait IsEqualComparable<WithT> {}
@@ -1042,7 +1094,7 @@ pub enum IndexOption {}
 pub enum LeftBoundOption {}
 pub enum RightBoundOption {}
 
-#[derive(Serialize, Default)]
+#[derive(Copy, Clone, Debug, Serialize, Default)]
 pub struct NoOptions {}
 
 impl Options for NoOptions {
@@ -1051,7 +1103,7 @@ impl Options for NoOptions {
     }
 }
 
-#[derive(Serialize, Default)]
+#[derive(Copy, Clone, Debug, Serialize, Default)]
 pub struct GetAllOptions<IndexT: OptionValue = ()> {
     #[serde(skip_serializing_if = "OptionValue::is_unset")] index: IndexT,
 }
@@ -1072,7 +1124,7 @@ impl<NameT: IntoExpr<StringOut>> WithOption<IndexOption, NameT> for GetAllOption
     }
 }
 
-#[derive(Serialize, Default)]
+#[derive(Copy, Clone, Debug, Serialize, Default)]
 pub struct BetweenOptions<
     IndexT: OptionValue = (),
     LeftBoundT: OptionValue = (),

@@ -7,7 +7,12 @@ use rethink::{query as r, Connection, Error, RawConnection, Wait};
 
 fn run() -> Result<(), Error> {
     let mut connection = Connection::from_raw(RawConnection::connect("172.17.0.1:28015")?);
-    let mut cursor = connection.run(r::db_list())?;
+    let mut cursor = connection.run(
+        r::db("default")
+            .table("comment_cursors")
+            .filter(|x| x.g("n").eq("summary-updater"))
+            .map(|x| (x.g("n"), x.g("e"))),
+    )?;
     let name: Vec<String> = connection.next(Wait::Yes, &mut cursor)?.unwrap();
     println!("{:?}", name);
     Ok(())
