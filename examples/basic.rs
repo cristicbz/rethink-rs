@@ -10,8 +10,10 @@ fn run() -> Result<(), Error> {
     let mut cursor = connection.run(
         r::db("default")
             .table("comment_cursors")
+            .get_all(r::args(("summary-updater", "a", "b")))
             .filter(|x| x.g("n").eq("summary-updater"))
-            .map(|x| (x.g("n"), x.g("e"))),
+            .map(|x| x.g("n")),
+            //.in_index("foo")
     )?;
     let name: Vec<String> = connection.next(Wait::Yes, &mut cursor)?.unwrap();
     println!("{:?}", name);

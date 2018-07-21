@@ -446,7 +446,15 @@ impl<OutT, AstT> Expr<OutT, AstT> {
     }
 
     // FIXME: Implement offsets_of.
+
     // FIXME: Implement is_empty.
+    pub fn is_empty(self) -> Expr<BoolOut, Term<(AstT,)>>
+    where
+        OutT: IsSequence,
+    {
+        Expr::raw(term(term::IS_EMPTY, (self.ast,)))
+    }
+
     // FIXME: Implement union.
     // FIXME: Implement sample.
 
@@ -454,14 +462,61 @@ impl<OutT, AstT> Expr<OutT, AstT> {
     // FIXME: Implement ungroup.
     // FIXME: Implement reduce.
     // FIXME: Implement fold.
+
     // FIXME: Implement sum.
+    pub fn sum(self) -> Expr<NumberOut, Term<(AstT,)>>
+    where
+        OutT: IsSequence,
+        OutT::SequenceItem: IsNumber,
+    {
+        Expr::raw(term(term::SUM, (self.ast,)))
+    }
+
     // FIXME: Implement avg.
+    pub fn avg(self) -> Expr<NumberOut, Term<(AstT,)>>
+    where
+        OutT: IsSequence,
+        OutT::SequenceItem: IsNumber,
+    {
+        Expr::raw(term(term::AVG, (self.ast,)))
+    }
+
     // FIXME: Implement min.
+    pub fn min(self) -> Expr<OutT::SequenceItem, Term<(AstT,)>>
+    where
+        OutT: IsSequence,
+    {
+        Expr::raw(term(term::MIN, (self.ast,)))
+    }
+
     // FIXME: Implement max.
+    pub fn max(self) -> Expr<OutT::SequenceItem, Term<(AstT,)>>
+    where
+        OutT: IsSequence,
+    {
+        Expr::raw(term(term::MAX, (self.ast,)))
+    }
+
     // FIXME: Implement distinct.
+    pub fn distinct(self) -> Expr<OutT, Term<(AstT,)>>
+    where
+        OutT: IsSequence,
+    {
+        Expr::raw(term(term::DISTINCT, (self.ast,)))
+    }
+
     // FIXME: Implement contains.
+    pub fn contains<ValueT, ValueOutT>(self, value: ValueT) -> Expr<BoolOut, Term<(AstT,)>>
+    where
+        OutT: IsSequence,
+        OutT::SequenceItem: IsEqualComparable<ValueOutT>,
+        ValueT: IntoExpr<ValueOutT>,
+    {
+        Expr::raw(term(term::DISTINCT, (self.ast,)))
+    }
 
     // FIXME: Implement r.row implicit var functions.
+
     // FIXME: Implement pluck.
     // FIXME: Implement without.
     // FIXME: Implement merge.
@@ -522,11 +577,82 @@ impl<OutT, AstT> Expr<OutT, AstT> {
     }
 
     // FIXME: Implement sub
+    pub fn sub<OtherOutT, OtherT>(
+        self,
+        other: OtherT,
+    ) -> Expr<NumberOut, Term<(AstT, OtherT::Ast)>>
+    where
+        OutT: IsNumber,
+        OtherOutT: IsNumber,
+        OtherT: IntoExpr<OtherOutT>,
+    {
+        Expr::raw(term(term::SUB, (self.ast, other.into_ast())))
+    }
+
     // FIXME: Implement mul
+    pub fn mul<OtherOutT, OtherT>(
+        self,
+        other: OtherT,
+    ) -> Expr<NumberOut, Term<(AstT, OtherT::Ast)>>
+    where
+        OutT: IsNumber,
+        OtherOutT: IsNumber,
+        OtherT: IntoExpr<OtherOutT>,
+    {
+        Expr::raw(term(term::MUL, (self.ast, other.into_ast())))
+    }
+
     // FIXME: Implement div
+    pub fn div<OtherOutT, OtherT>(
+        self,
+        other: OtherT,
+    ) -> Expr<NumberOut, Term<(AstT, OtherT::Ast)>>
+    where
+        OutT: IsNumber,
+        OtherOutT: IsNumber,
+        OtherT: IntoExpr<OtherOutT>,
+    {
+        Expr::raw(term(term::DIV, (self.ast, other.into_ast())))
+    }
+
     // FIXME: Implement mod
+    pub fn modulo<OtherOutT, OtherT>(
+        self,
+        other: OtherT,
+    ) -> Expr<NumberOut, Term<(AstT, OtherT::Ast)>>
+    where
+        OutT: IsNumber,
+        OtherOutT: IsNumber,
+        OtherT: IntoExpr<OtherOutT>,
+    {
+        Expr::raw(term(term::MOD, (self.ast, other.into_ast())))
+    }
+
     // FIXME: Implement and
+    pub fn and<OtherOutT, OtherT>(
+        self,
+        other: OtherT,
+    ) -> Expr<BoolOut, Term<(AstT, OtherT::Ast)>>
+    where
+        OutT: IsBool,
+        OtherOutT: IsBool,
+        OtherT: IntoExpr<OtherOutT>,
+    {
+        Expr::raw(term(term::AND, (self.ast, other.into_ast())))
+    }
+
     // FIXME: Implement or
+    pub fn or<OtherOutT, OtherT>(
+        self,
+        other: OtherT,
+    ) -> Expr<BoolOut, Term<(AstT, OtherT::Ast)>>
+    where
+        OutT: IsBool,
+        OtherOutT: IsBool,
+        OtherT: IntoExpr<OtherOutT>,
+    {
+        Expr::raw(term(term::OR, (self.ast, other.into_ast())))
+    }
 
     /// Test if two or more values are equal.
     /// FIXME: Support more args.
@@ -879,6 +1005,14 @@ pub trait IsString {}
 impl IsString for StringOut {}
 impl IsString for AnyOut {}
 
+pub trait IsNumber {}
+impl IsNumber for NumberOut {}
+impl IsNumber for AnyOut {}
+
+pub trait IsBool {}
+impl IsBool for BoolOut {}
+impl IsBool for AnyOut {}
+
 pub trait IsKey {}
 impl IsKey for StringOut {}
 impl IsKey for NumberOut {}
@@ -981,7 +1115,6 @@ impl IsEqualComparable<AnyOut> for StringOut {}
 impl IsEqualComparable<AnyOut> for ObjectOut {}
 impl<OfT> IsEqualComparable<AnyOut> for ArrayOut<OfT> {}
 
-
 pub trait IsSelection<OfT> {}
 impl<OfT> IsSelection<OfT> for SelectionOut<OfT> {}
 impl<OfT> IsSelection<OfT> for SingleSelectionOut<OfT> {}
@@ -1005,13 +1138,13 @@ impl<WithT, OfT> CanAdd<ArrayOut<WithT>> for ArrayOut<OfT> {
 }
 
 impl CanAdd<AnyOut> for NumberOut {
-    type Output = AnyOut;
+    type Output = NumberOut;
 }
 impl CanAdd<AnyOut> for StringOut {
-    type Output = AnyOut;
+    type Output = StringOut;
 }
 impl<OfT> CanAdd<AnyOut> for ArrayOut<OfT> {
-    type Output = AnyOut;
+    type Output = ArrayOut<AnyOut>;
 }
 
 pub type Var<OutT> = Expr<OutT, Term<(usize,)>>;
@@ -1158,6 +1291,7 @@ impl<
     }
 }
 
+// FIXME: Should use `IsString` rather than StringOut
 impl<
     IndexT: OptionValue,
     LeftBoundT: IntoExpr<StringOut>,
