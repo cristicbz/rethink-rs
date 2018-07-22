@@ -5,7 +5,6 @@ use byteorder::{LittleEndian, ByteOrder, BigEndian};
 use std::io::{Read, Write, BufReader, ErrorKind as IoErrorKind};
 use std::net::{TcpStream, ToSocketAddrs, SocketAddr, Shutdown};
 use serde::Serialize;
-use ql2_proto;
 use serde_json;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
@@ -79,8 +78,7 @@ impl RawConnection {
         self.next_token += 1;
 
         serde_json::to_writer(&mut self.write_buffer, &(
-            ql2_proto::mod_Query::QueryType::START as
-                u8,
+            ::enums::query::START,
             query,
             &self.options,
         ))?;

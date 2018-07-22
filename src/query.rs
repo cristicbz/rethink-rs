@@ -5,6 +5,7 @@ use std::marker::PhantomData;
 use std::sync::atomic::{AtomicUsize, Ordering, ATOMIC_USIZE_INIT};
 use super::enums::term;
 
+
 #[derive(Copy, Clone, Debug)]
 pub struct Expr<OutT, AstT> {
     ast: AstT,
@@ -12,14 +13,14 @@ pub struct Expr<OutT, AstT> {
 }
 
 /// Construct a ReQL object.
-pub fn expr<OutT, OfT: IntoExpr<OutT>>(of: OfT) -> Expr<OutT, OfT::Ast> {
+pub fn expr<OutT, OfT: IntoExpr>(of: OfT) -> Expr<OfT::Out, OfT::Ast> {
     of.into_expr()
 }
 
 /// `args` is a special term that’s used to splice an array of arguments into another term. This is
 /// useful when you want to call a variadic term such as getAll with a set of arguments produced at
 /// runtime.
-pub fn args<OutT, OfT: IntoExpr<ArrayOut<OutT>>>(of: OfT) -> Args<OutT, Term<(OfT::Ast,)>> {
+pub fn args<OutT, OfT: IntoExpr<Out=ArrayOut<OutT>>>(of: OfT) -> Args<OutT, Term<(OfT::Ast,)>> {
     Args {
         ast: term(term::ARGS, (of.into_ast(),)),
         _phantom: PhantomData,
@@ -52,7 +53,7 @@ pub fn db_drop<NameT: Serialize>(name: NameT) -> Expr<ObjectOut, Term<(NameT,)>>
 impl<OutT, AstT> Expr<OutT, AstT> {
     /// Return all documents in a table. Other commands may be chained after table to return a
     /// subset of documents (such as get and filter) or perform further processing.
-    pub fn table<NameT: IntoExpr<StringOut>>(
+    pub fn table<NameT: IntoExpr<Out=StringOut>>(
         self,
         name: NameT,
     ) -> Expr<TableOut, Term<(AstT, NameT::Ast)>>
@@ -63,7 +64,7 @@ impl<OutT, AstT> Expr<OutT, AstT> {
     }
 
     /// Create a table. A RethinkDB table is a collection of JSON documents.
-    pub fn table_create<NameT: IntoExpr<StringOut>>(
+    pub fn table_create<NameT: IntoExpr<Out=StringOut>>(
         self,
         name: NameT,
     ) -> Expr<ObjectOut, Term<(AstT, NameT::Ast)>>
@@ -74,7 +75,7 @@ impl<OutT, AstT> Expr<OutT, AstT> {
     }
 
     /// Drop a table. The table and all its data will be deleted.
-    pub fn table_drop<NameT: IntoExpr<StringOut>>(
+    pub fn table_drop<NameT: IntoExpr<Out=StringOut>>(
         self,
         name: NameT,
     ) -> Expr<ObjectOut, Term<(AstT, NameT::Ast)>>
@@ -96,7 +97,7 @@ impl<OutT, AstT> Expr<OutT, AstT> {
     /// queries at the slight cost of increased storage space and decreased write performance.
     ///
     /// FIXME: Index functions and options are not supported just yet, bear with me!
-    pub fn index_create<NameT: IntoExpr<StringOut>>(
+    pub fn index_create<NameT: IntoExpr<Out=StringOut>>(
         self,
         name: NameT,
     ) -> Expr<ObjectOut, Term<(AstT, NameT::Ast)>>
@@ -107,7 +108,7 @@ impl<OutT, AstT> Expr<OutT, AstT> {
     }
 
     /// Delete a previously created secondary index of this table.
-    pub fn index_drop<NameT: IntoExpr<StringOut>>(
+    pub fn index_drop<NameT: IntoExpr<Out=StringOut>>(
         self,
         name: NameT,
     ) -> Expr<ObjectOut, Term<(AstT, NameT::Ast)>>
@@ -131,7 +132,7 @@ impl<OutT, AstT> Expr<OutT, AstT> {
     /// new index name already exists.
     ///
     /// FIXME: overwrite option is not implemented.
-    pub fn index_rename<SourceT: IntoExpr<StringOut>, DestinationT: IntoExpr<StringOut>>(
+    pub fn index_rename<SourceT: IntoExpr<Out=StringOut>, DestinationT: IntoExpr<Out=StringOut>>(
         self,
         source: SourceT,
         destination: DestinationT,
@@ -171,14 +172,13 @@ impl<OutT, AstT> Expr<OutT, AstT> {
 
     /// Insert documents into a table. Accepts a single document or an array of documents.
     /// FIXME: Missing insert options.
-    pub fn insert<ObjectsOutT, ObjectsT>(
+    pub fn insert<ObjectsT>(
         self,
         objects: ObjectsT,
     ) -> Expr<ObjectOut, Term<(AstT, ObjectsT::Ast)>>
     where
-        OutT: IsTable,
-        ObjectsOutT: IsObjectOrObjectSequence,
-        ObjectsT: IntoExpr<ObjectsOutT>,
+        ObjectsT: IntoExpr,
+        ObjectsT::Out: IsObjectOrObjectSequence,
     {
         Expr::raw(term(term::INSERT, (self.ast, objects.into_ast())))
     }
@@ -189,7 +189,7 @@ impl<OutT, AstT> Expr<OutT, AstT> {
     pub fn update<ObjectT>(self, object: ObjectT) -> Expr<ObjectOut, Term<(AstT, ObjectT::Ast)>>
     where
         OutT: IsSelection<ObjectOut>,
-        ObjectT: IntoExpr<ObjectOut>,
+        ObjectT: IntoExpr<Out=ObjectOut>,
     {
         Expr::raw(term(term::UPDATE, (self.ast, object.into_ast())))
     }
@@ -203,7 +203,7 @@ impl<OutT, AstT> Expr<OutT, AstT> {
     ) -> Expr<ObjectOut, Term<(AstT, FunctionT::FunctionAst)>>
     where
         OutT: IsSelection<ObjectOut>,
-        ReturnT: IntoExpr<ObjectOut>,
+        ReturnT: IntoExpr<Out=ObjectOut>,
         FunctionT: FnOnce(Var<ObjectOut>) -> ReturnT + IntoFunctionExpr<(ObjectOut,), ObjectOut>,
     {
         Expr::raw(term(
@@ -235,12 +235,13 @@ impl<OutT, AstT> Expr<OutT, AstT> {
     }
 
     /// Get a document by primary key.
-    pub fn get<KeyOutT: IsString, KeyT: IntoExpr<KeyOutT>>(
+    pub fn get<KeyT: IntoExpr>(
         self,
         key: KeyT,
     ) -> Expr<SingleSelectionOut<ObjectOut>, Term<(AstT, KeyT::Ast)>>
     where
         OutT: IsTable,
+        KeyT::Out: IsKey,
     {
         Expr::raw(term(term::GET, (self.ast, key.into_ast())))
     }
@@ -262,7 +263,7 @@ impl<OutT, AstT> Expr<OutT, AstT> {
     /// default). `left_bound` or `right_bound` may be set to `"open"` or `"closed"` to indicate
     /// whether or not to include that endpoint of the range (by default, `left_bound` is `"closed"`
     /// and `right_bound` is `"open"`).
-    pub fn between<MinT: IntoExpr<KeysOutT>, MaxT: IntoExpr<KeysOutT>, KeysOutT: IsIndexKey>(
+    pub fn between<MinT: MinLimitFor<KeysOutT>, MaxT: MaxLimitFor<KeysOutT>, KeysOutT: IsIndexKey>(
         self,
         min: MinT,
         max: MaxT,
@@ -314,6 +315,8 @@ impl<OutT, AstT> Expr<OutT, AstT> {
     ) -> Expr<OutT, Term<(AstT, FilterT::FunctionAst)>>
     where
         OutT: IsSequence,
+        ReturnT: IntoExpr,
+        ReturnT::Out: IsBool,
         FilterT: FnOnce(Var<OutT::SequenceItem>) -> ReturnT
             + IntoFunctionExpr<(OutT::SequenceItem,), BoolOut>,
     {
@@ -342,15 +345,15 @@ impl<OutT, AstT> Expr<OutT, AstT> {
     /// shortest sequence.
     ///
     /// FIXME: Implement support for multiple sequences.
-    pub fn map<ReturnT, ReturnOutT, MapT>(
+    pub fn map<ReturnT, MapT>(
         self,
         map: MapT,
     ) -> Expr<OutT::Rebound, Term<(AstT, MapT::FunctionAst)>>
     where
-        OutT: Rebind<ReturnOutT>,
-        ReturnT: IntoExpr<ReturnOutT>,
+        OutT: Rebind<ReturnT::Out>,
+        ReturnT: IntoExpr,
         MapT: FnOnce(Var<OutT::SequenceItem>) -> ReturnT
-            + IntoFunctionExpr<(OutT::SequenceItem,), ReturnOutT>,
+            + IntoFunctionExpr<(OutT::SequenceItem,), ReturnT::Out>,
     {
         Expr::raw(term(term::MAP, (self.ast, map.into_function_expr().ast)))
     }
@@ -371,16 +374,16 @@ impl<OutT, AstT> Expr<OutT, AstT> {
     }
 
     /// Concatenate one or more elements into a single sequence using a mapping function.
-    pub fn concat_map<ReturnT, ReturnOutT, MapT>(
+    pub fn concat_map<ReturnT, MapT>(
         self,
         concat_map: MapT,
     ) -> Expr<OutT::Rebound, Term<(AstT, MapT::FunctionAst)>>
     where
-        OutT: Rebind<ReturnOutT::SequenceItem>,
-        ReturnT: IntoExpr<ReturnOutT>,
-        ReturnOutT: IsSequence,
+        OutT: Rebind<<ReturnT::Out as IsSequence>::SequenceItem>,
+        ReturnT: IntoExpr,
+        ReturnT::Out: IsSequence,
         MapT: FnOnce(Var<OutT::SequenceItem>) -> ReturnT
-            + IntoFunctionExpr<(OutT::SequenceItem,), ReturnOutT>,
+            + IntoFunctionExpr<(OutT::SequenceItem,), ReturnT::Out>,
     {
         Expr::raw(term(
             term::CONCAT_MAP,
@@ -393,7 +396,7 @@ impl<OutT, AstT> Expr<OutT, AstT> {
     /// Skip a number of elements from the head of the sequence.
     pub fn skip<NumT>(self, n: NumT) -> Expr<OutT, Term<(AstT, NumT::Ast)>>
     where
-        NumT: IntoExpr<NumberOut>,
+        NumT: IntoExpr<Out=NumberOut>,
         OutT: IsSequence,
     {
         Expr::raw(term(term::SKIP, (self.ast, n.into_ast())))
@@ -402,7 +405,7 @@ impl<OutT, AstT> Expr<OutT, AstT> {
     /// End the sequence after the given number of elements.
     pub fn limit<NumT>(self, n: NumT) -> Expr<OutT, Term<(AstT, NumT::Ast)>>
     where
-        NumT: IntoExpr<NumberOut>,
+        NumT: IntoExpr<Out=NumberOut>,
         OutT: IsSequence,
     {
         Expr::raw(term(term::LIMIT, (self.ast, n.into_ast())))
@@ -411,7 +414,7 @@ impl<OutT, AstT> Expr<OutT, AstT> {
     /// Return the elements of a sequence within the specified range.
     pub fn slice_after<NumT>(self, start: NumT) -> Expr<OutT, Term<(AstT, NumT::Ast)>>
     where
-        NumT: IntoExpr<NumberOut>,
+        NumT: IntoExpr<Out=NumberOut>,
         OutT: IsSequence,
     {
         Expr::raw(term(term::SLICE, (self.ast, start.into_ast())))
@@ -425,8 +428,8 @@ impl<OutT, AstT> Expr<OutT, AstT> {
         end: EndT,
     ) -> Expr<OutT, Term<(AstT, StartT::Ast, EndT::Ast)>>
     where
-        StartT: IntoExpr<NumberOut>,
-        EndT: IntoExpr<NumberOut>,
+        StartT: IntoExpr<Out=NumberOut>,
+        EndT: IntoExpr<Out=NumberOut>,
         OutT: IsSequence,
     {
         Expr::raw(term(
@@ -439,7 +442,7 @@ impl<OutT, AstT> Expr<OutT, AstT> {
     /// from the last element.
     pub fn nth<NumT>(self, n: NumT) -> Expr<OutT::Select, Term<(AstT, NumT::Ast)>>
     where
-        NumT: IntoExpr<NumberOut>,
+        NumT: IntoExpr<Out=NumberOut>,
         OutT: IsSequence,
     {
         Expr::raw(term(term::NTH, (self.ast, n.into_ast())))
@@ -506,13 +509,13 @@ impl<OutT, AstT> Expr<OutT, AstT> {
     }
 
     // FIXME: Implement contains.
-    pub fn contains<ValueT, ValueOutT>(self, value: ValueT) -> Expr<BoolOut, Term<(AstT,)>>
+    pub fn contains<ValueT>(self, value: ValueT) -> Expr<BoolOut, Term<(AstT, ValueT::Ast)>>
     where
         OutT: IsSequence,
-        OutT::SequenceItem: IsEqualComparable<ValueOutT>,
-        ValueT: IntoExpr<ValueOutT>,
+        OutT::SequenceItem: IsEqualComparable<ValueT::Out>,
+        ValueT: IntoExpr,
     {
-        Expr::raw(term(term::DISTINCT, (self.ast,)))
+        Expr::raw(term(term::CONTAINS, (self.ast, value.into_ast())))
     }
 
     // FIXME: Implement r.row implicit var functions.
@@ -530,10 +533,10 @@ impl<OutT, AstT> Expr<OutT, AstT> {
 
     /// Get a single field from an object. If called on a sequence, gets that field from every
     /// object in the sequence, skipping objects that lack it.
-    pub fn get_field<KeyT: IntoExpr<StringOut>>(
+    pub fn get_field<KeyT: IntoExpr<Out=StringOut>>(
         self,
         key: KeyT,
-    ) -> Expr<AnyOut, Term<(AstT, KeyT::Ast)>>
+    ) -> Expr<OutT::AnyOrAnySequence, Term<(AstT, KeyT::Ast)>>
     where
         OutT: IsObjectOrObjectSequence,
     {
@@ -541,11 +544,22 @@ impl<OutT, AstT> Expr<OutT, AstT> {
     }
 
     /// Alias for `get_field`.
-    pub fn g<KeyT: IntoExpr<StringOut>>(self, key: KeyT) -> Expr<AnyOut, Term<(AstT, KeyT::Ast)>>
+    pub fn g<KeyT: IntoExpr<Out=StringOut>>(
+        self,
+        key: KeyT,
+    ) -> Expr<OutT::AnyOrAnySequence, Term<(AstT, KeyT::Ast)>>
     where
         OutT: IsObjectOrObjectSequence,
     {
-        self.get_field(key)
+        Expr::raw(term(term::GET_FIELD, (self.ast, key.into_ast())))
+    }
+
+    /// Alias for `get_field` that asserts the result is a object.
+    pub fn get_object<KeyT: IntoExpr<Out=StringOut>>(self, key: KeyT) -> Expr<ObjectOut, Term<(AstT, KeyT::Ast)>>
+    where
+        OutT: IsObjectOrObjectSequence,
+    {
+        self.get_field(key).as_object()
     }
 
     // FIXME: Implement hasFields
@@ -565,111 +579,111 @@ impl<OutT, AstT> Expr<OutT, AstT> {
 
     /// Sum two or more numbers, or concatenate two or more strings or arrays.
     /// FIXME: Support more args.
-    pub fn add<OtherOutT, OtherT>(
+    pub fn add<OtherT>(
         self,
         other: OtherT,
     ) -> Expr<OutT::Output, Term<(AstT, OtherT::Ast)>>
     where
-        OutT: CanAdd<OtherOutT>,
-        OtherT: IntoExpr<OtherOutT>,
+        OutT: CanAdd<OtherT::Out>,
+        OtherT: IntoExpr,
     {
         Expr::raw(term(term::ADD, (self.ast, other.into_ast())))
     }
 
     // FIXME: Implement sub
-    pub fn sub<OtherOutT, OtherT>(
+    pub fn sub<OtherT>(
         self,
         other: OtherT,
     ) -> Expr<NumberOut, Term<(AstT, OtherT::Ast)>>
     where
         OutT: IsNumber,
-        OtherOutT: IsNumber,
-        OtherT: IntoExpr<OtherOutT>,
+        OtherT::Out: IsNumber,
+        OtherT: IntoExpr,
     {
         Expr::raw(term(term::SUB, (self.ast, other.into_ast())))
     }
 
     // FIXME: Implement mul
-    pub fn mul<OtherOutT, OtherT>(
+    pub fn mul<OtherT>(
         self,
         other: OtherT,
     ) -> Expr<NumberOut, Term<(AstT, OtherT::Ast)>>
     where
         OutT: IsNumber,
-        OtherOutT: IsNumber,
-        OtherT: IntoExpr<OtherOutT>,
+        OtherT::Out: IsNumber,
+        OtherT: IntoExpr,
     {
         Expr::raw(term(term::MUL, (self.ast, other.into_ast())))
     }
 
     // FIXME: Implement div
-    pub fn div<OtherOutT, OtherT>(
+    pub fn div<OtherT>(
         self,
         other: OtherT,
     ) -> Expr<NumberOut, Term<(AstT, OtherT::Ast)>>
     where
         OutT: IsNumber,
-        OtherOutT: IsNumber,
-        OtherT: IntoExpr<OtherOutT>,
+        OtherT::Out: IsNumber,
+        OtherT: IntoExpr,
     {
         Expr::raw(term(term::DIV, (self.ast, other.into_ast())))
     }
 
     // FIXME: Implement mod
-    pub fn modulo<OtherOutT, OtherT>(
+    pub fn modulo<OtherT>(
         self,
         other: OtherT,
     ) -> Expr<NumberOut, Term<(AstT, OtherT::Ast)>>
     where
         OutT: IsNumber,
-        OtherOutT: IsNumber,
-        OtherT: IntoExpr<OtherOutT>,
+        OtherT::Out: IsNumber,
+        OtherT: IntoExpr,
     {
         Expr::raw(term(term::MOD, (self.ast, other.into_ast())))
     }
 
     // FIXME: Implement and
-    pub fn and<OtherOutT, OtherT>(
+    pub fn and<OtherT>(
         self,
         other: OtherT,
     ) -> Expr<BoolOut, Term<(AstT, OtherT::Ast)>>
     where
         OutT: IsBool,
-        OtherOutT: IsBool,
-        OtherT: IntoExpr<OtherOutT>,
+        OtherT::Out: IsBool,
+        OtherT: IntoExpr,
     {
         Expr::raw(term(term::AND, (self.ast, other.into_ast())))
     }
 
     // FIXME: Implement or
-    pub fn or<OtherOutT, OtherT>(
+    pub fn or<OtherT>(
         self,
         other: OtherT,
     ) -> Expr<BoolOut, Term<(AstT, OtherT::Ast)>>
     where
         OutT: IsBool,
-        OtherOutT: IsBool,
-        OtherT: IntoExpr<OtherOutT>,
+        OtherT::Out: IsBool,
+        OtherT: IntoExpr,
     {
         Expr::raw(term(term::OR, (self.ast, other.into_ast())))
     }
 
     /// Test if two or more values are equal.
     /// FIXME: Support more args.
-    pub fn eq<OtherOutT, OtherT>(self, other: OtherT) -> Expr<BoolOut, Term<(AstT, OtherT::Ast)>>
+    pub fn eq<OtherT>(self, other: OtherT) -> Expr<BoolOut, Term<(AstT, OtherT::Ast)>>
     where
-        OutT: IsEqualComparable<OtherOutT>,
-        OtherT: IntoExpr<OtherOutT>,
+        OutT: IsEqualComparable<OtherT::Out>,
+        OtherT: IntoExpr,
     {
         Expr::raw(term(term::EQ, (self.ast, other.into_ast())))
     }
 
     /// Test if two or more values are not equal.
     /// FIXME: Support more args.
-    pub fn ne<OtherOutT, OtherT>(self, other: OtherT) -> Expr<BoolOut, Term<(AstT, OtherT::Ast)>>
+    pub fn ne<OtherT>(self, other: OtherT) -> Expr<BoolOut, Term<(AstT, OtherT::Ast)>>
     where
-        OutT: IsEqualComparable<OtherOutT>,
-        OtherT: IntoExpr<OtherOutT>,
+        OutT: IsEqualComparable<OtherT::Out>,
+        OtherT: IntoExpr,
     {
         Expr::raw(term(term::NE, (self.ast, other.into_ast())))
     }
@@ -726,35 +740,23 @@ impl<OutT, AstT> Expr<OutT, AstT> {
     // FIXME: Implement status
     // FIXME: Implement wait
 
-    pub fn as_any(self) -> Expr<AnyOut, AstT> {
+    pub fn as_number(self) -> Expr<NumberOut, AstT> {
         Expr::raw(self.ast)
     }
 
-    pub fn as_number(self) -> Expr<NumberOut, AstT>
-    where
-        Self: IntoExpr<NumberOut>,
-    {
+    pub fn as_string(self) -> Expr<StringOut, AstT> {
         Expr::raw(self.ast)
     }
 
-    pub fn as_string(self) -> Expr<StringOut, AstT>
-    where
-        Self: IntoExpr<StringOut>,
-    {
+    pub fn as_bool(self) -> Expr<BoolOut, AstT> {
         Expr::raw(self.ast)
     }
 
-    pub fn as_bool(self) -> Expr<BoolOut, AstT>
-    where
-        Self: IntoExpr<BoolOut>,
-    {
+    pub fn as_object(self) -> Expr<ObjectOut, AstT> {
         Expr::raw(self.ast)
     }
 
-    pub fn as_object(self) -> Expr<ObjectOut, AstT>
-    where
-        Self: IntoExpr<ObjectOut>,
-    {
+    pub fn items_as<OtherT>(self) -> Expr<OutT::Rebound, AstT> where OutT: Rebind<OtherT> {
         Expr::raw(self.ast)
     }
 }
@@ -765,9 +767,9 @@ pub struct Args<OfT, AstT> {
     _phantom: PhantomData<*const OfT>,
 }
 
-impl<OfT, ExprT> From<ExprT> for Args<OfT, ExprT::Ast>
+impl<ExprT> From<ExprT> for Args<ExprT::Out, ExprT::Ast>
 where
-    ExprT: IntoExpr<ArrayOut<OfT>>,
+    ExprT: IntoExpr,
 {
     fn from(expr: ExprT) -> Self {
         Args {
@@ -793,7 +795,9 @@ impl<OutT, AstT: Serialize> Serialize for Expr<OutT, AstT> {
     }
 }
 
-impl<OutT, AstT: Serialize> IntoExpr<OutT> for Expr<OutT, AstT> {}
+impl<OutT, AstT: Serialize> IntoExpr for Expr<OutT, AstT> {
+    type Out = OutT;
+}
 
 
 #[derive(Copy, Clone, Debug, Serialize)]
@@ -817,8 +821,10 @@ pub trait IntoAst: Sized {
     fn into_ast(self) -> Self::Ast;
 }
 
-pub trait IntoExpr<OutT>: IntoAst {
-    fn into_expr(self) -> Expr<OutT, Self::Ast> {
+pub trait IntoExpr: IntoAst {
+    type Out;
+
+    fn into_expr(self) -> Expr<Self::Out, Self::Ast> {
         Expr::raw(self.into_ast())
     }
 }
@@ -829,19 +835,6 @@ impl<AstT: Serialize, OutT> IntoAst for Expr<OutT, AstT> {
         self.ast
     }
 }
-
-
-impl<OutT, AstT: Serialize> IntoExpr<ArrayOut<OutT>> for Expr<AnyOut, AstT> {}
-
-macro_rules! any_into_expr {
-    ($($output:ty),+) => {
-        $(
-            impl<AstT: Serialize> IntoExpr<$output> for Expr<AnyOut, AstT> {}
-         )+
-    }
-}
-
-any_into_expr!(StringOut, NumberOut, BoolOut, NullOut, ObjectOut);
 
 pub trait Datum: Serialize {
     type Out;
@@ -863,8 +856,12 @@ macro_rules! impl_datum {
                 }
             }
 
-            impl IntoExpr<$output> for $rust {}
-            impl<'a> IntoExpr<$output> for &'a $rust {}
+            impl IntoExpr for $rust {
+                type Out = $output;
+            }
+            impl<'a> IntoExpr for &'a $rust {
+                type Out = $output;
+            }
          )+
     };
     ($output:ty, ref $rust:ty) => {
@@ -874,7 +871,9 @@ macro_rules! impl_datum {
                 self
             }
         }
-        impl<'a> IntoExpr<$output> for &'a $rust {}
+        impl<'a> IntoExpr for &'a $rust {
+            type Out = $output;
+        }
     };
 }
 
@@ -898,7 +897,9 @@ macro_rules! impl_datum_fixed_array {
                 }
             }
 
-            impl<OfOutT, OfT: IntoExpr<OfOutT>> IntoExpr<ArrayOut<OfOutT>> for [OfT; $len] {}
+            impl<OfT: IntoExpr> IntoExpr for [OfT; $len] {
+                type Out = ArrayOut<OfT::Out>;
+            }
          )+
     }
 }
@@ -918,9 +919,11 @@ macro_rules! impl_datum_tuple {
             }
         }
 
-        impl<$head, $($tail),*> IntoExpr<ArrayOut<AnyOut>> for ($head, $($tail),*)
+        impl<$head, $($tail),*> IntoExpr for ($head, $($tail),*)
             where $head: IntoAst, $($tail: IntoAst),*
-        {}
+        {
+            type Out = ArrayOut<AnyOut>;
+        }
 
         impl_datum_tuple!($($tail,)*);
     }
@@ -954,8 +957,14 @@ impl IntoAst for MaxVal {
     }
 }
 
-impl<OutT> IntoExpr<OutT> for MinVal {}
-impl<OutT> IntoExpr<OutT> for MaxVal {}
+pub trait MinLimitFor<OutT>: IntoAst {}
+pub trait MaxLimitFor<OutT>: IntoAst {}
+
+impl<ExprT: IntoExpr> MinLimitFor<ExprT::Out> for ExprT {}
+impl<ExprT: IntoExpr> MaxLimitFor<ExprT::Out> for ExprT {}
+
+impl<OutT> MinLimitFor<OutT> for MinVal {}
+impl<OutT> MaxLimitFor<OutT> for MaxVal {}
 
 #[derive(Copy, Clone, Debug)]
 pub enum StringOut {}
@@ -990,38 +999,35 @@ pub struct NullOr<OfT>(PhantomData<*const OfT>);
 
 pub trait IsDb {}
 impl IsDb for DbOut {}
-impl IsDb for AnyOut {}
 
 pub trait IsTable {}
 impl IsTable for TableOut {}
-impl IsTable for AnyOut {}
 
 pub trait IsObject {}
 impl IsObject for ObjectOut {}
-impl IsObject for AnyOut {}
-impl<OfT: IsObject> IsObject for SingleSelectionOut<OfT> {}
+impl IsObject for SingleSelectionOut<ObjectOut> {}
 
 pub trait IsString {}
 impl IsString for StringOut {}
-impl IsString for AnyOut {}
+impl IsString for SingleSelectionOut<StringOut> {}
 
 pub trait IsNumber {}
 impl IsNumber for NumberOut {}
-impl IsNumber for AnyOut {}
+impl IsNumber for SingleSelectionOut<NumberOut> {}
 
 pub trait IsBool {}
 impl IsBool for BoolOut {}
-impl IsBool for AnyOut {}
+impl IsBool for SingleSelectionOut<BoolOut> {}
 
 pub trait IsKey {}
 impl IsKey for StringOut {}
 impl IsKey for NumberOut {}
-impl IsKey for AnyOut {}
+impl IsKey for SingleSelectionOut<StringOut> {}
+impl IsKey for SingleSelectionOut<NumberOut> {}
 
 pub trait IsSelector {}
 impl IsSelector for StringOut {}
 impl IsSelector for ObjectOut {}
-impl IsSelector for AnyOut {}
 
 pub trait IsIndexKey {}
 impl<OfT> IsIndexKey for ArrayOut<OfT> {}
@@ -1031,17 +1037,28 @@ impl<OfT> IsIndexKey for StreamOut<OfT> {}
 impl IsIndexKey for BoolOut {}
 impl IsIndexKey for NumberOut {}
 impl IsIndexKey for StringOut {}
-impl IsIndexKey for NullOut {}
-impl IsIndexKey for AnyOut {}
 
-pub trait IsObjectOrObjectSequence {}
-impl IsObjectOrObjectSequence for ObjectOut {}
-impl<OfT: IsObject> IsObjectOrObjectSequence for SingleSelectionOut<OfT> {}
-impl<OfT: IsObject> IsObjectOrObjectSequence for SelectionOut<OfT> {}
-impl<OfT: IsObject> IsObjectOrObjectSequence for StreamOut<OfT> {}
-impl<OfT: IsObject> IsObjectOrObjectSequence for ArrayOut<OfT> {}
-impl IsObjectOrObjectSequence for TableOut {}
-impl IsObjectOrObjectSequence for AnyOut {}
+pub trait IsObjectOrObjectSequence {
+    type AnyOrAnySequence;
+}
+impl IsObjectOrObjectSequence for ObjectOut {
+    type AnyOrAnySequence = AnyOut;
+}
+impl<OfT: IsObject> IsObjectOrObjectSequence for SingleSelectionOut<OfT> {
+    type AnyOrAnySequence = AnyOut;
+}
+impl<OfT: IsObject> IsObjectOrObjectSequence for SelectionOut<OfT> {
+    type AnyOrAnySequence = SelectionOut<AnyOut>;
+}
+impl<OfT: IsObject> IsObjectOrObjectSequence for StreamOut<OfT> {
+    type AnyOrAnySequence = StreamOut<AnyOut>;
+}
+impl<OfT: IsObject> IsObjectOrObjectSequence for ArrayOut<OfT> {
+    type AnyOrAnySequence = ArrayOut<AnyOut>;
+}
+impl IsObjectOrObjectSequence for TableOut {
+    type AnyOrAnySequence = SelectionOut<AnyOut>;
+}
 
 pub trait IsSequence {
     type SequenceItem;
@@ -1088,38 +1105,21 @@ impl<ToT, OfT> Rebind<ToT> for SelectionOut<OfT> {
     type Rebound = StreamOut<ToT>;
 }
 
-impl IsSequence for AnyOut {
-    type SequenceItem = AnyOut;
-    type Select = SingleSelectionOut<AnyOut>;
-}
-
-impl<ToT> Rebind<ToT> for AnyOut {
-    type Rebound = StreamOut<ToT>;
-}
-
 pub trait IsEqualComparable<WithT> {}
 impl IsEqualComparable<BoolOut> for BoolOut {}
 impl IsEqualComparable<NumberOut> for NumberOut {}
 impl IsEqualComparable<StringOut> for StringOut {}
 impl IsEqualComparable<ObjectOut> for ObjectOut {}
-impl<WithT> IsEqualComparable<WithT> for AnyOut {}
 impl<WithT, OfT> IsEqualComparable<ArrayOut<WithT>> for ArrayOut<OfT>
 where
     OfT: IsEqualComparable<WithT>,
 {
 }
 
-impl IsEqualComparable<AnyOut> for BoolOut {}
-impl IsEqualComparable<AnyOut> for NumberOut {}
-impl IsEqualComparable<AnyOut> for StringOut {}
-impl IsEqualComparable<AnyOut> for ObjectOut {}
-impl<OfT> IsEqualComparable<AnyOut> for ArrayOut<OfT> {}
-
 pub trait IsSelection<OfT> {}
 impl<OfT> IsSelection<OfT> for SelectionOut<OfT> {}
 impl<OfT> IsSelection<OfT> for SingleSelectionOut<OfT> {}
 impl<ObjectT> IsSelection<ObjectT> for TableOut {}
-impl<OfT> IsSelection<OfT> for AnyOut {}
 
 pub trait CanAdd<WithT> {
     type Output;
@@ -1130,20 +1130,7 @@ impl CanAdd<NumberOut> for NumberOut {
 impl CanAdd<StringOut> for StringOut {
     type Output = StringOut;
 }
-impl<WithT> CanAdd<WithT> for AnyOut {
-    type Output = AnyOut;
-}
 impl<WithT, OfT> CanAdd<ArrayOut<WithT>> for ArrayOut<OfT> {
-    type Output = ArrayOut<AnyOut>;
-}
-
-impl CanAdd<AnyOut> for NumberOut {
-    type Output = NumberOut;
-}
-impl CanAdd<AnyOut> for StringOut {
-    type Output = StringOut;
-}
-impl<OfT> CanAdd<AnyOut> for ArrayOut<OfT> {
     type Output = ArrayOut<AnyOut>;
 }
 
@@ -1163,14 +1150,14 @@ pub trait IntoFunctionExpr<ArgsT, ReturnT> {
     fn into_function_expr(self) -> Expr<FunctionOut<ArgsT, ReturnT>, Self::FunctionAst>;
 }
 
-impl<Arg1T, ReturnRawT, ReturnT, FunctionT> IntoFunctionExpr<(Arg1T,), ReturnT> for FunctionT
+impl<Arg1T, ReturnRawT, FunctionT> IntoFunctionExpr<(Arg1T,), ReturnRawT::Out> for FunctionT
 where
     FunctionT: FnOnce(Var<Arg1T>) -> ReturnRawT,
-    ReturnRawT: IntoExpr<ReturnT>,
+    ReturnRawT: IntoExpr,
 {
     type FunctionAst = Term<(Term<(usize,)>, ReturnRawT::Ast)>;
 
-    fn into_function_expr(self) -> Expr<FunctionOut<(Arg1T,), ReturnT>, Self::FunctionAst> {
+    fn into_function_expr(self) -> Expr<FunctionOut<(Arg1T,), ReturnRawT::Out>, Self::FunctionAst> {
         let var = fresh_var();
         let var_id = (var.ast.1).0;
         Expr::raw(term(
@@ -1247,7 +1234,7 @@ impl<IndexT: OptionValue> Options for GetAllOptions<IndexT> {
     }
 }
 
-impl<NameT: IntoExpr<StringOut>> WithOption<IndexOption, NameT> for GetAllOptions<()> {
+impl<NameT: IntoExpr<Out=StringOut>> WithOption<IndexOption, NameT> for GetAllOptions<()> {
     type WithOption = GetAllOptions<Expr<StringOut, NameT::Ast>>;
 
     fn with_option(self, value: NameT) -> Self::WithOption {
@@ -1276,7 +1263,7 @@ impl<IndexT: OptionValue, LeftBoundT: OptionValue, RightBoundT: OptionValue> Opt
 }
 
 impl<
-    NameT: IntoExpr<StringOut>,
+    NameT: IntoExpr<Out=StringOut>,
     LeftBoundT: OptionValue,
     RightBoundT: OptionValue,
 > WithOption<IndexOption, NameT> for BetweenOptions<(), LeftBoundT, RightBoundT> {
@@ -1294,7 +1281,7 @@ impl<
 // FIXME: Should use `IsString` rather than StringOut
 impl<
     IndexT: OptionValue,
-    LeftBoundT: IntoExpr<StringOut>,
+    LeftBoundT: IntoExpr<Out=StringOut>,
     RightBoundT: OptionValue,
 > WithOption<LeftBoundOption, LeftBoundT> for BetweenOptions<IndexT, (), RightBoundT> {
     type WithOption = BetweenOptions<IndexT, Expr<StringOut, LeftBoundT::Ast>, RightBoundT>;
@@ -1311,7 +1298,7 @@ impl<
 impl<
     IndexT: OptionValue,
     LeftBoundT: OptionValue,
-    RightBoundT: IntoExpr<StringOut>,
+    RightBoundT: IntoExpr<Out=StringOut>,
 > WithOption<RightBoundOption, RightBoundT> for BetweenOptions<IndexT, LeftBoundT, ()> {
     type WithOption = BetweenOptions<IndexT, LeftBoundT, Expr<StringOut, RightBoundT::Ast>>;
 

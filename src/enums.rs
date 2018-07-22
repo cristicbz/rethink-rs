@@ -1,4 +1,5 @@
 pub mod term {
+    #![allow(dead_code)]
     pub const DATUM: u32 = 1;
     pub const MAKE_ARRAY: u32 = 2;
     pub const MAKE_OBJ: u32 = 3;
@@ -177,4 +178,13 @@ pub mod term {
     pub const POLYGON_SUB: u32 = 171;
     pub const MINVAL: u32 = 180;
     pub const MAXVAL: u32 = 181;
+}
+
+pub mod query {
+    #![allow(dead_code)]
+    pub const START: u8 = 1;
+    pub const CONTINUE: u8 = 2;
+    pub const STOP: u8 = 3;
+    pub const NOREPLY_WAIT: u8 = 4;
+    pub const SERVER_INFO: u8 = 5;
 }

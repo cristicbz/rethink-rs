@@ -10,7 +10,6 @@ extern crate byteorder;
 extern crate arrayvec;
 #[macro_use]
 extern crate log;
-extern crate ql2_proto;
 
 pub mod query;
 pub mod raw;

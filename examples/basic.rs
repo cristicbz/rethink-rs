@@ -4,18 +4,18 @@ extern crate log;
 extern crate rethink;
 
 use rethink::{query as r, Connection, Error, RawConnection, Wait};
+use std::time::Duration;
 
 fn run() -> Result<(), Error> {
     let mut connection = Connection::from_raw(RawConnection::connect("172.17.0.1:28015")?);
     let mut cursor = connection.run(
         r::db("default")
             .table("comment_cursors")
-            .get_all(r::args(("summary-updater", "a", "b")))
-            .filter(|x| x.g("n").eq("summary-updater"))
-            .map(|x| x.g("n")),
-            //.in_index("foo")
+            .g("n")
+            .items_as::<r::StringOut>()
+            .map(|x| x.add("foo"))
     )?;
-    let name: Vec<String> = connection.next(Wait::Yes, &mut cursor)?.unwrap();
+    let name: Vec<String> = connection.next(Wait::For(Duration::from_secs(1)), &mut cursor)?.unwrap();
     println!("{:?}", name);
     Ok(())
 }
