@@ -15,7 +15,6 @@ pub mod query;
 pub mod raw;
 pub mod connection;
 mod enums;
-mod concatenator;
 
 pub use raw::{RawConnection, Wait};
 pub use connection::Connection;
