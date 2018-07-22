@@ -1,12 +1,13 @@
-use failure::Error;
-use byteorder::{ByteOrder, BigEndian};
+use super::raw::{RawConnection, Token, Wait};
+use byteorder::{BigEndian, ByteOrder};
+use errors::{ErrorKind, Result, ServerErrorKind};
+use failure::ResultExt;
+use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json;
-use super::raw::{RawConnection, Token, Wait};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicUsize, Ordering, ATOMIC_USIZE_INIT};
-use serde::de::DeserializeOwned;
 use std::str::{self, FromStr};
+use std::sync::atomic::{AtomicUsize, Ordering, ATOMIC_USIZE_INIT};
 
 pub struct Connection {
     raw: RawConnection,
@@ -27,7 +28,7 @@ impl Connection {
         }
     }
 
-    pub fn run<QueryT: Serialize>(&mut self, query: QueryT) -> Result<Cursor, Error> {
+    pub fn run<QueryT: Serialize>(&mut self, query: QueryT) -> Result<Cursor> {
         Ok(Cursor {
             token: self.raw.start_request(query)?,
             connection_id: self.connection_id,
@@ -38,18 +39,25 @@ impl Connection {
         })
     }
 
+    pub fn is_open(&mut self) -> bool {
+        self.raw.is_open()
+    }
+
+    pub fn close(&self) -> Result<()> {
+        self.raw.close()
+    }
+
     pub fn next<PayloadT: DeserializeOwned>(
         &mut self,
         wait: Wait,
         cursor: &mut Cursor,
-    ) -> Result<Option<PayloadT>, Error> {
+    ) -> Result<Option<PayloadT>> {
         assert_eq!(
-            cursor.connection_id,
-            self.connection_id,
+            cursor.connection_id, self.connection_id,
             "Used a cursor from a different connection."
         );
         if cursor.exhausted || cursor.num_resets != self.num_resets {
-            return Err(format_err!("Cursor was closed."));
+            return Err(ErrorKind::ReadFromClosedCursor.into());
         }
 
         if cursor.buffer.is_none() {
@@ -65,7 +73,7 @@ impl Connection {
             buffer_exhausted = content_end == buffer.len();
             cursor.position = content_end;
             if size > buffer.len() {
-                Err(format_err!("Buffer underrun."))
+                Err(ErrorKind::Connection("Buffer underrun.".into()).into())
             } else {
                 match extract_from_response(&buffer[content_start..content_end]) {
                     Ok((payload, complete)) => {
@@ -74,7 +82,7 @@ impl Connection {
                         }
                         Ok(Some(payload))
                     }
-                    Err(error) => Err(error.into()),
+                    Err(error) => Err(error),
                 }
             }
         } else {
@@ -90,7 +98,7 @@ impl Connection {
         result
     }
 
-    fn recv(&mut self, token: Token, wait: Wait) -> Result<Option<Vec<u8>>, Error> {
+    fn recv(&mut self, token: Token, wait: Wait) -> Result<Option<Vec<u8>>> {
         if let Some(response_buffer) = self.responses.remove(&token) {
             return Ok(Some(response_buffer));
         }
@@ -99,14 +107,13 @@ impl Connection {
         // TODO(cristicbz): wait is incorrect.
         let response_token = {
             let responses = &mut self.responses;
-            self.raw.recv(
-                wait,
-                |response_token| if response_token == token {
+            self.raw.recv(wait, |response_token| {
+                if response_token == token {
                     &mut buffer
                 } else {
                     responses.entry(response_token).or_insert_with(Vec::new)
-                },
-            )
+                }
+            })
         };
 
         match response_token {
@@ -136,69 +143,75 @@ enum Complete {
 
 fn extract_from_response<PayloadT: DeserializeOwned>(
     buffer: &[u8],
-) -> Result<(PayloadT, Complete), Error> {
+) -> Result<(PayloadT, Complete)> {
     debug!("Response: {}", String::from_utf8_lossy(buffer));
     if !buffer.starts_with(RESPONSE_PREFIX) {
-        return Err(format_err!(
-            "Unexpected start of response: {}",
-            String::from_utf8_lossy(&buffer[..RESPONSE_TYPE_START])
-        ));
+        return Err(ErrorKind::Connection(
+            format!(
+                "unexpected start of response: {}",
+                String::from_utf8_lossy(&buffer[..RESPONSE_TYPE_START])
+            ).into(),
+        ).into());
     }
-    let comma_position = match buffer[RESPONSE_TYPE_START..].iter().position(
-        |&x| x == b',',
-    ) {
+    let comma_position = match buffer[RESPONSE_TYPE_START..]
+        .iter()
+        .position(|&x| x == b',')
+    {
         Some(comma_position) => comma_position + RESPONSE_TYPE_START,
         None => {
-            return Err(format_err!(
-                "Comma missing in response: {}",
-                String::from_utf8_lossy(&buffer[RESPONSE_TYPE_START..])
-            ));
+            return Err(ErrorKind::Connection(
+                format!(
+                    "comma missing in response: {}",
+                    String::from_utf8_lossy(&buffer[RESPONSE_TYPE_START..])
+                ).into(),
+            ).into());
         }
     };
-    let response_type = u32::from_str(str::from_utf8(
-        &buffer[RESPONSE_TYPE_START..comma_position],
-    )?)?;
+    let response_type = u32::from_str(
+        str::from_utf8(&buffer[RESPONSE_TYPE_START..comma_position])
+            .context(ErrorKind::Connection("invalid utf-8 in response".into()))?,
+    ).context(ErrorKind::Connection("response type not a number".into()))?;
     match response_type {
         SUCCESS_ATOM => {
-            let response: AtomResponse<PayloadT> = serde_json::from_slice(buffer)?;
+            let response: AtomResponse<PayloadT> =
+                serde_json::from_slice(buffer).context(ErrorKind::UnexpectedResponse)?;
             Ok((response.payload.0, Complete::Yes))
         }
         SUCCESS_PARTIAL => {
-            let response: SequenceResponse<PayloadT> = serde_json::from_slice(buffer)?;
+            let response: SequenceResponse<PayloadT> =
+                serde_json::from_slice(buffer).context(ErrorKind::UnexpectedResponse)?;
             Ok((response.payload, Complete::No))
         }
         SUCCESS_SEQUENCE => {
-            let response: SequenceResponse<PayloadT> = serde_json::from_slice(buffer)?;
+            let response: SequenceResponse<PayloadT> =
+                serde_json::from_slice(buffer).context(ErrorKind::UnexpectedResponse)?;
             Ok((response.payload, Complete::Yes))
         }
         CLIENT_ERROR | RUNTIME_ERROR | COMPILE_ERROR => {
-            let response: ErrorResponse = serde_json::from_slice(buffer)?;
+            let response: ErrorResponse = serde_json::from_slice(buffer).context(
+                ErrorKind::Connection("invalid json in error response".into()),
+            )?;
 
-            Err(format_err!(
-                "{} error code={:?} span={:?}: {}",
-                match response_type {
-                    CLIENT_ERROR => "Client",
-                    RUNTIME_ERROR => "Runtime",
-                    COMPILE_ERROR => "Compile",
-                    _ => unreachable!(),
+            Err(ErrorKind::Server {
+                kind: match response_type {
+                    CLIENT_ERROR => ServerErrorKind::Client,
+                    RUNTIME_ERROR => ServerErrorKind::Runtime,
+                    COMPILE_ERROR => ServerErrorKind::Compile,
+                    _ => ServerErrorKind::Unknown,
                 },
-                response.error_code,
-                response.span,
-                response.message.0
-            ))
+                code: response.error_code.unwrap_or(-1),
+                span: response.span,
+                message: response.message.0,
+            }.into())
         }
-        _ => {
-            Err(format_err!(
-                "Unexpected response type: {}",
-                response_type,
-            ))
-        }
+        _ => Err(ErrorKind::Connection(
+            format!("unexpected response type: {}", response_type).into(),
+        ).into()),
     }
 }
 
 const RESPONSE_PREFIX: &[u8] = b"{\"t\":";
 const RESPONSE_TYPE_START: usize = 5; // After the prefix.
-
 
 const SUCCESS_ATOM: u32 = 1;
 const SUCCESS_SEQUENCE: u32 = 2;
@@ -208,7 +221,6 @@ const SUCCESS_PARTIAL: u32 = 3;
 const CLIENT_ERROR: u32 = 16;
 const COMPILE_ERROR: u32 = 17;
 const RUNTIME_ERROR: u32 = 18;
-
 
 #[derive(Deserialize)]
 struct AtomResponse<PayloadT> {
@@ -225,15 +237,14 @@ struct SequenceResponse<PayloadT> {
 #[derive(Deserialize)]
 struct ErrorResponse {
     #[serde(rename = "e")]
-    error_code: Option<u32>,
+    error_code: Option<i32>,
 
     #[serde(rename = "b")]
-    span: Vec<u32>,
+    span: Box<[u32]>,
 
     #[serde(rename = "r")]
-    message: (String,),
+    message: (Box<str>,),
 }
-
 
 pub struct Cursor {
     token: Token,

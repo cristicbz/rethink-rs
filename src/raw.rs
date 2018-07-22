@@ -1,11 +1,11 @@
+use byteorder::{BigEndian, ByteOrder, LittleEndian};
+use errors::{ErrorKind, Result};
 use failure::ResultExt;
-pub use failure::Error;
-use std::time::Duration;
-use byteorder::{LittleEndian, ByteOrder, BigEndian};
-use std::io::{Read, Write, BufReader, ErrorKind as IoErrorKind};
-use std::net::{TcpStream, ToSocketAddrs, SocketAddr, Shutdown};
 use serde::Serialize;
 use serde_json;
+use std::io::{BufReader, ErrorKind as IoErrorKind, Read, Write};
+use std::net::{Shutdown, SocketAddr, TcpStream};
+use std::time::Duration;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub struct Token(pub u64);
@@ -19,13 +19,7 @@ pub struct RawConnection {
 }
 
 impl RawConnection {
-    pub fn connect<A: ToSocketAddrs>(address: A) -> Result<Self, Error> {
-        let endpoint = address
-            .to_socket_addrs()
-            .context("resolving address error")?
-            .next()
-            .unwrap();
-
+    pub fn connect(endpoint: SocketAddr) -> Result<Self> {
         Ok(RawConnection {
             endpoint,
             tcp: handshake(&endpoint)?,
@@ -35,15 +29,17 @@ impl RawConnection {
         })
     }
 
-    pub fn close(&self) -> Result<(), Error> {
-        Ok(match self.tcp.get_ref().shutdown(Shutdown::Both) {
-            Ok(_) => Ok(()),
+    pub fn close(&self) -> Result<()> {
+        match self.tcp.get_ref().shutdown(Shutdown::Both) {
             Err(ref error) if error.kind() == IoErrorKind::NotConnected => Ok(()),
-            result @ _ => result,
-        }?)
+            result @ _ => {
+                result.context(ErrorKind::Connection("failed to close socket".into()))?;
+                Ok(())
+            }
+        }
     }
 
-    pub fn reset(&mut self) -> Result<(), Error> {
+    pub fn reset(&mut self) -> Result<()> {
         self.next_token = 1;
         match handshake(&self.endpoint) {
             Ok(tcp) => {
@@ -70,18 +66,17 @@ impl RawConnection {
             .unwrap_or(false)
     }
 
-    pub fn start_request<QueryT: Serialize>(&mut self, query: QueryT) -> Result<Token, Error> {
+    pub fn start_request<QueryT: Serialize>(&mut self, query: QueryT) -> Result<Token> {
         self.write_buffer.clear();
         self.write_buffer.resize(REQUEST_HEADER_SIZE, 0u8);
         BigEndian::write_u64(&mut self.write_buffer, self.next_token);
         let token = Token(self.next_token);
         self.next_token += 1;
 
-        serde_json::to_writer(&mut self.write_buffer, &(
-            ::enums::query::START,
-            query,
-            &self.options,
-        ))?;
+        serde_json::to_writer(
+            &mut self.write_buffer,
+            &(::enums::query::START, query, &self.options),
+        ).context(ErrorKind::Connection("failed to serialize request".into()))?;
         let request_size = self.write_buffer.len() - REQUEST_HEADER_SIZE;
         assert!(
             request_size < u32::max_value() as usize,
@@ -96,17 +91,29 @@ impl RawConnection {
             token,
             request_size,
             String::from_utf8_lossy(&self.write_buffer[REQUEST_HEADER_SIZE..]),
-            );
-        self.tcp.get_mut().write_all(&self.write_buffer)?;
-        self.tcp.get_mut().flush()?;
+        );
+        self.tcp
+            .get_mut()
+            .write_all(&self.write_buffer)
+            .context(ErrorKind::Connection("failed to send start request".into()))?;
+        self.tcp.get_mut().flush().context(ErrorKind::Connection(
+            "failed to flush start request".into(),
+        ))?;
         Ok(token)
     }
 
-    pub fn continue_request(&mut self, token: Token) -> Result<(), Error> {
+    pub fn continue_request(&mut self, token: Token) -> Result<()> {
         let mut request = CONTINUE_REQUEST_TEMPLATE;
         BigEndian::write_u64(&mut request[..REQUEST_LENGTH_OFFSET], token.0);
-        self.tcp.get_mut().write_all(&request)?;
-        self.tcp.get_mut().flush()?;
+        self.tcp
+            .get_mut()
+            .write_all(&request)
+            .context(ErrorKind::Connection(
+                "failed to send continue request".into(),
+            ))?;
+        self.tcp.get_mut().flush().context(ErrorKind::Connection(
+            "failed to flush continue request".into(),
+        ))?;
         Ok(())
     }
 
@@ -114,33 +121,42 @@ impl RawConnection {
         &mut self,
         wait: Wait,
         buffer: F,
-    ) -> Result<Option<Token>, Error> {
+    ) -> Result<Option<Token>> {
         let mut header = [0u8; REQUEST_HEADER_SIZE];
         let header_read_result = match wait {
             Wait::Yes => self.tcp.read_exact(&mut header),
             Wait::No => {
-                self.tcp.get_mut().set_nonblocking(true)?;
+                self.tcp
+                    .get_mut()
+                    .set_nonblocking(true)
+                    .context(ErrorKind::Connection("failed to set nonblocking".into()))?;
                 let result = self.tcp.read_exact(&mut header);
-                self.tcp.get_mut().set_nonblocking(false)?;
+                self.tcp
+                    .get_mut()
+                    .set_nonblocking(false)
+                    .context(ErrorKind::Connection("failed to unset nonblocking".into()))?;
                 result
             }
             Wait::For(duration) => {
-                self.tcp.get_mut().set_read_timeout(Some(duration))?;
+                self.tcp
+                    .get_mut()
+                    .set_read_timeout(Some(duration))
+                    .context(ErrorKind::Connection("failed to set read timeout".into()))?;
                 let result = self.tcp.read_exact(&mut header);
-                self.tcp.get_mut().set_read_timeout(Some(
-                    Duration::from_millis(MESSAGE_TIMEOUT_MS),
-                ))?;
+                self.tcp
+                    .get_mut()
+                    .set_read_timeout(Some(Duration::from_millis(MESSAGE_TIMEOUT_MS)))
+                    .context(ErrorKind::Connection("failed to reset read timeout".into()))?;
                 result
             }
         };
         debug!("Received header: {:?}", header);
 
-        if let Err(error) = header_read_result {
-            return if error.kind() == IoErrorKind::TimedOut {
-                Ok(None)
-            } else {
-                Err(error.into())
-            };
+        match header_read_result {
+            Err(ref error) if error.kind() == IoErrorKind::TimedOut => {
+                return Ok(None);
+            }
+            result @ _ => result.context(ErrorKind::Connection("failed to read header".into()))?,
         }
 
         let (token, size) = header.split_at(REQUEST_LENGTH_OFFSET);
@@ -153,33 +169,42 @@ impl RawConnection {
         let final_buffer_len = initial_buffer_len + 4 + size as usize;
         buffer.resize(final_buffer_len, 0u8);
         BigEndian::write_u32(&mut buffer[initial_buffer_len..], size);
-        self.tcp.read_exact(&mut buffer[initial_buffer_len + 4..])?;
+        self.tcp
+            .read_exact(&mut buffer[initial_buffer_len + 4..])
+            .context(ErrorKind::Connection("failed to read response body".into()))?;
         Ok(Some(token))
     }
 }
 
-fn handshake(endpoint: &SocketAddr) -> Result<BufReader<TcpStream>, Error> {
+fn handshake(endpoint: &SocketAddr) -> Result<BufReader<TcpStream>> {
     let mut tcp =
         TcpStream::connect_timeout(&endpoint, Duration::from_millis(CONNECTION_TIMEOUT_MS))
-            .context("connection error")?;
+            .context(ErrorKind::Connection("connection error".into()))?;
     tcp.set_read_timeout(Some(Duration::from_millis(MESSAGE_TIMEOUT_MS)))
-        .context("set read timeout error")?;
+        .context(ErrorKind::Connection("set read timeout error".into()))?;
     tcp.set_write_timeout(Some(Duration::from_millis(MESSAGE_TIMEOUT_MS)))
-        .context("set write timeout error")?;
-    tcp.set_nodelay(true).context("set nodelay error")?;
-    tcp.write_all(HANDSHAKE_REQUEST)?;
-    tcp.flush()?;
+        .context(ErrorKind::Connection("set write timeout error".into()))?;
+    tcp.set_nodelay(true)
+        .context(ErrorKind::Connection("set nodelay error".into()))?;
+    tcp.write_all(HANDSHAKE_REQUEST)
+        .context(ErrorKind::Connection("error sending handshake".into()))?;
+    tcp.flush()
+        .context(ErrorKind::Connection("error flushing handshake".into()))?;
 
     let mut tcp = BufReader::new(tcp);
     let mut response = [0; HANDSHAKE_RESPONSE_LEN];
-    tcp.read_exact(&mut response).context(
-        "reading handshake error",
-    )?;
+    tcp.read_exact(&mut response)
+        .context(ErrorKind::Connection(
+            "error reading handshake response".into(),
+        ))?;
 
     if response == HANDSHAKE_SUCCESS {
         Ok(tcp)
     } else {
-        Err(format_err!("Handshake failed: {:?}", response))
+        Err(
+            ErrorKind::Connection(format!("handshake failed, response: {:?}", response).into())
+                .into(),
+        )
     }
 }
 
@@ -213,18 +238,7 @@ const CONNECTION_TIMEOUT_MS: u64 = 5000;
 const MESSAGE_TIMEOUT_MS: u64 = 30000;
 
 const HANDSHAKE_REQUEST: &[u8] = &[
-    0x20,
-    0x2d,
-    0x0c,
-    0x40,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0xc7,
-    0x70,
-    0x69,
-    0x7e,
+    0x20, 0x2d, 0x0c, 0x40, 0x00, 0x00, 0x00, 0x00, 0xc7, 0x70, 0x69, 0x7e,
 ];
 const HANDSHAKE_RESPONSE_LEN: usize = 8;
 const HANDSHAKE_SUCCESS: [u8; HANDSHAKE_RESPONSE_LEN] =

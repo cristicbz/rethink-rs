@@ -13,7 +13,7 @@ pub struct Expr<OutT, AstT> {
 }
 
 /// Construct a ReQL object.
-pub fn expr<OutT, OfT: IntoExpr>(of: OfT) -> Expr<OfT::Out, OfT::Ast> {
+pub fn expr<OfT: IntoExpr>(of: OfT) -> Expr<OfT::Out, OfT::Ast> {
     of.into_expr()
 }
 
