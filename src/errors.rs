@@ -19,6 +19,9 @@ pub enum ErrorKind {
     #[fail(display = "Failed to deserialize expected response.")]
     UnexpectedResponse,
 
+    #[fail(display = "Timed out while waiting for result in iteration.")]
+    IteratorTimeout,
+
     #[fail(display = "Connection error: {}", _0)]
     Connection(Cow<'static, str>),
 

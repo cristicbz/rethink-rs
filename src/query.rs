@@ -1,26 +1,25 @@
-pub use failure::Error;
+use super::enums::term;
 use arrayvec::ArrayVec;
+pub use failure::Error;
 use serde::ser::{Serialize, Serializer};
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicUsize, Ordering, ATOMIC_USIZE_INIT};
-use super::enums::term;
-
 
 #[derive(Copy, Clone, Debug)]
-pub struct Expr<OutT, AstT> {
+pub struct Query<OutT, AstT> {
     ast: AstT,
     _phantom: PhantomData<*const OutT>,
 }
 
 /// Construct a ReQL object.
-pub fn expr<OfT: IntoExpr>(of: OfT) -> Expr<OfT::Out, OfT::Ast> {
+pub fn expr<OfT: IntoQuery>(of: OfT) -> Query<OfT::Out, OfT::Ast> {
     of.into_expr()
 }
 
 /// `args` is a special term that’s used to splice an array of arguments into another term. This is
 /// useful when you want to call a variadic term such as getAll with a set of arguments produced at
 /// runtime.
-pub fn args<OutT, OfT: IntoExpr<Out=ArrayOut<OutT>>>(of: OfT) -> Args<OutT, Term<(OfT::Ast,)>> {
+pub fn args<OutT, OfT: IntoQuery<Out = ArrayOut<OutT>>>(of: OfT) -> Args<OutT, Term<(OfT::Ast,)>> {
     Args {
         ast: term(term::ARGS, (of.into_ast(),)),
         _phantom: PhantomData,
@@ -30,100 +29,100 @@ pub fn args<OutT, OfT: IntoExpr<Out=ArrayOut<OutT>>>(of: OfT) -> Args<OutT, Term
 // FIXME: Implement binary.
 
 /// Reference a database.
-pub fn db<NameT: Serialize>(name: NameT) -> Expr<DbOut, Term<(NameT,)>> {
-    Expr::raw(term(term::DB, (name,)))
+pub fn db<NameT: Serialize>(name: NameT) -> Query<DbOut, Term<(NameT,)>> {
+    Query::raw(term(term::DB, (name,)))
 }
 
 /// Create a database. A RethinkDB database is a collection of tables, similar to relational
 /// databases.
-pub fn db_create<NameT: Serialize>(name: NameT) -> Expr<ObjectOut, Term<(NameT,)>> {
-    Expr::raw(term(term::DB_CREATE, (name,)))
+pub fn db_create<NameT: Serialize>(name: NameT) -> Query<ObjectOut, Term<(NameT,)>> {
+    Query::raw(term(term::DB_CREATE, (name,)))
 }
 
 /// List all database names in the cluster. The result is a list of strings.
-pub fn db_list() -> Expr<ArrayOut<StringOut>, Term<[u8; 0]>> {
-    Expr::raw(term(term::DB_LIST, []))
+pub fn db_list() -> Query<ArrayOut<StringOut>, Term<[u8; 0]>> {
+    Query::raw(term(term::DB_LIST, []))
 }
 
 /// Drop a database. The database, all its tables, and corresponding data will be deleted.
-pub fn db_drop<NameT: Serialize>(name: NameT) -> Expr<ObjectOut, Term<(NameT,)>> {
-    Expr::raw(term(term::DB_DROP, (name,)))
+pub fn db_drop<NameT: Serialize>(name: NameT) -> Query<ObjectOut, Term<(NameT,)>> {
+    Query::raw(term(term::DB_DROP, (name,)))
 }
 
-impl<OutT, AstT> Expr<OutT, AstT> {
+impl<OutT, AstT> Query<OutT, AstT> {
     /// Return all documents in a table. Other commands may be chained after table to return a
     /// subset of documents (such as get and filter) or perform further processing.
-    pub fn table<NameT: IntoExpr<Out=StringOut>>(
+    pub fn table<NameT: IntoQuery<Out = StringOut>>(
         self,
         name: NameT,
-    ) -> Expr<TableOut, Term<(AstT, NameT::Ast)>>
+    ) -> Query<TableOut, Term<(AstT, NameT::Ast)>>
     where
         OutT: IsDb,
     {
-        Expr::raw(term(term::TABLE, (self.ast, name.into_ast())))
+        Query::raw(term(term::TABLE, (self.ast, name.into_ast())))
     }
 
     /// Create a table. A RethinkDB table is a collection of JSON documents.
-    pub fn table_create<NameT: IntoExpr<Out=StringOut>>(
+    pub fn table_create<NameT: IntoQuery<Out = StringOut>>(
         self,
         name: NameT,
-    ) -> Expr<ObjectOut, Term<(AstT, NameT::Ast)>>
+    ) -> Query<ObjectOut, Term<(AstT, NameT::Ast)>>
     where
         OutT: IsDb,
     {
-        Expr::raw(term(term::TABLE_CREATE, (self.ast, name.into_ast())))
+        Query::raw(term(term::TABLE_CREATE, (self.ast, name.into_ast())))
     }
 
     /// Drop a table. The table and all its data will be deleted.
-    pub fn table_drop<NameT: IntoExpr<Out=StringOut>>(
+    pub fn table_drop<NameT: IntoQuery<Out = StringOut>>(
         self,
         name: NameT,
-    ) -> Expr<ObjectOut, Term<(AstT, NameT::Ast)>>
+    ) -> Query<ObjectOut, Term<(AstT, NameT::Ast)>>
     where
         OutT: IsDb,
     {
-        Expr::raw(term(term::TABLE_DROP, (self.ast, name.into_ast())))
+        Query::raw(term(term::TABLE_DROP, (self.ast, name.into_ast())))
     }
 
     /// List all table names in a database. The result is a list of strings.
-    pub fn table_list(self) -> Expr<ArrayOut<StringOut>, Term<(AstT,)>>
+    pub fn table_list(self) -> Query<ArrayOut<StringOut>, Term<(AstT,)>>
     where
         OutT: IsDb,
     {
-        Expr::raw(term(term::TABLE_LIST, (self.ast,)))
+        Query::raw(term(term::TABLE_LIST, (self.ast,)))
     }
 
     /// Create a new secondary index on a table. Secondary indexes improve the speed of many read
     /// queries at the slight cost of increased storage space and decreased write performance.
     ///
     /// FIXME: Index functions and options are not supported just yet, bear with me!
-    pub fn index_create<NameT: IntoExpr<Out=StringOut>>(
+    pub fn index_create<NameT: IntoQuery<Out = StringOut>>(
         self,
         name: NameT,
-    ) -> Expr<ObjectOut, Term<(AstT, NameT::Ast)>>
+    ) -> Query<ObjectOut, Term<(AstT, NameT::Ast)>>
     where
         OutT: IsTable,
     {
-        Expr::raw(term(term::INDEX_CREATE, (self.ast, name.into_ast())))
+        Query::raw(term(term::INDEX_CREATE, (self.ast, name.into_ast())))
     }
 
     /// Delete a previously created secondary index of this table.
-    pub fn index_drop<NameT: IntoExpr<Out=StringOut>>(
+    pub fn index_drop<NameT: IntoQuery<Out = StringOut>>(
         self,
         name: NameT,
-    ) -> Expr<ObjectOut, Term<(AstT, NameT::Ast)>>
+    ) -> Query<ObjectOut, Term<(AstT, NameT::Ast)>>
     where
         OutT: IsTable,
     {
-        Expr::raw(term(term::INDEX_DROP, (self.ast, name.into_ast())))
+        Query::raw(term(term::INDEX_DROP, (self.ast, name.into_ast())))
     }
 
     /// List all the secondary indexes of this table.
-    pub fn index_list(self) -> Expr<ArrayOut<StringOut>, Term<(AstT,)>>
+    pub fn index_list(self) -> Query<ArrayOut<StringOut>, Term<(AstT,)>>
     where
         OutT: IsDb,
     {
-        Expr::raw(term(term::INDEX_LIST, (self.ast,)))
+        Query::raw(term(term::INDEX_LIST, (self.ast,)))
     }
 
     /// Rename an existing secondary index on a table. If the optional argument overwrite is
@@ -132,15 +131,18 @@ impl<OutT, AstT> Expr<OutT, AstT> {
     /// new index name already exists.
     ///
     /// FIXME: overwrite option is not implemented.
-    pub fn index_rename<SourceT: IntoExpr<Out=StringOut>, DestinationT: IntoExpr<Out=StringOut>>(
+    pub fn index_rename<
+        SourceT: IntoQuery<Out = StringOut>,
+        DestinationT: IntoQuery<Out = StringOut>,
+    >(
         self,
         source: SourceT,
         destination: DestinationT,
-    ) -> Expr<ObjectOut, Term<(AstT, SourceT::Ast, DestinationT::Ast)>>
+    ) -> Query<ObjectOut, Term<(AstT, SourceT::Ast, DestinationT::Ast)>>
     where
         OutT: IsTable,
     {
-        Expr::raw(term(
+        Query::raw(term(
             term::INDEX_DROP,
             (self.ast, source.into_ast(), destination.into_ast()),
         ))
@@ -151,11 +153,11 @@ impl<OutT, AstT> Expr<OutT, AstT> {
     pub fn index_status<NameT: IsString, ArgsAstT, KeysT: Into<Args<NameT, ArgsAstT>>>(
         self,
         key: KeysT,
-    ) -> Expr<SelectionOut<ObjectOut>, Term<(AstT, ArgsAstT), GetAllOptions>>
+    ) -> Query<SelectionOut<ObjectOut>, Term<(AstT, ArgsAstT), GetAllOptions>>
     where
         OutT: IsTable,
     {
-        Expr::raw(term(term::INDEX_STATUS, (self.ast, key.into().ast)))
+        Query::raw(term(term::INDEX_STATUS, (self.ast, key.into().ast)))
     }
 
     /// Wait for the specified indexes on this table to be ready, or for all indexes on this table
@@ -163,11 +165,11 @@ impl<OutT, AstT> Expr<OutT, AstT> {
     pub fn index_wait<NameT: IsString, ArgsAstT, KeysT: Into<Args<NameT, ArgsAstT>>>(
         self,
         key: KeysT,
-    ) -> Expr<SelectionOut<ObjectOut>, Term<(AstT, ArgsAstT)>>
+    ) -> Query<SelectionOut<ObjectOut>, Term<(AstT, ArgsAstT)>>
     where
         OutT: IsTable,
     {
-        Expr::raw(term(term::INDEX_WAIT, (self.ast, key.into().ast)))
+        Query::raw(term(term::INDEX_WAIT, (self.ast, key.into().ast)))
     }
 
     /// Insert documents into a table. Accepts a single document or an array of documents.
@@ -175,23 +177,23 @@ impl<OutT, AstT> Expr<OutT, AstT> {
     pub fn insert<ObjectsT>(
         self,
         objects: ObjectsT,
-    ) -> Expr<ObjectOut, Term<(AstT, ObjectsT::Ast)>>
+    ) -> Query<ObjectOut, Term<(AstT, ObjectsT::Ast)>>
     where
-        ObjectsT: IntoExpr,
+        ObjectsT: IntoQuery,
         ObjectsT::Out: IsObjectOrObjectSequence,
     {
-        Expr::raw(term(term::INSERT, (self.ast, objects.into_ast())))
+        Query::raw(term(term::INSERT, (self.ast, objects.into_ast())))
     }
 
     /// Update JSON documents in a table. Accepts a JSON document, a ReQL expression, or a
     /// combination of the two.
     /// FIXME: Missing update options.
-    pub fn update<ObjectT>(self, object: ObjectT) -> Expr<ObjectOut, Term<(AstT, ObjectT::Ast)>>
+    pub fn update<ObjectT>(self, object: ObjectT) -> Query<ObjectOut, Term<(AstT, ObjectT::Ast)>>
     where
         OutT: IsSelection<ObjectOut>,
-        ObjectT: IntoExpr<Out=ObjectOut>,
+        ObjectT: IntoQuery<Out = ObjectOut>,
     {
-        Expr::raw(term(term::UPDATE, (self.ast, object.into_ast())))
+        Query::raw(term(term::UPDATE, (self.ast, object.into_ast())))
     }
 
     /// Update JSON documents in a table. Accepts a JSON document, a ReQL expression, or a
@@ -200,13 +202,13 @@ impl<OutT, AstT> Expr<OutT, AstT> {
     pub fn update_with<FunctionT, ReturnT>(
         self,
         with: FunctionT,
-    ) -> Expr<ObjectOut, Term<(AstT, FunctionT::FunctionAst)>>
+    ) -> Query<ObjectOut, Term<(AstT, FunctionT::FunctionAst)>>
     where
         OutT: IsSelection<ObjectOut>,
-        ReturnT: IntoExpr<Out=ObjectOut>,
-        FunctionT: FnOnce(Var<ObjectOut>) -> ReturnT + IntoFunctionExpr<(ObjectOut,), ObjectOut>,
+        ReturnT: IntoQuery<Out = ObjectOut>,
+        FunctionT: FnOnce(Var<ObjectOut>) -> ReturnT + IntoFunctionQuery<(ObjectOut,), ObjectOut>,
     {
-        Expr::raw(term(
+        Query::raw(term(
             term::UPDATE,
             (self.ast, with.into_function_expr().ast),
         ))
@@ -216,45 +218,45 @@ impl<OutT, AstT> Expr<OutT, AstT> {
 
     /// Delete one or more documents from a table.
     /// FIXME: Missing delete options.
-    pub fn delete(self) -> Expr<ObjectOut, Term<(AstT,)>>
+    pub fn delete(self) -> Query<ObjectOut, Term<(AstT,)>>
     where
         OutT: IsSelection<ObjectOut>,
     {
-        Expr::raw(term(term::DELETE, (self.ast,)))
+        Query::raw(term(term::DELETE, (self.ast,)))
     }
 
     /// Ensures that writes on a given table are written to permanent storage. Queries that specify
     /// soft durability (`durability='soft'`) do not give such guarantees, so sync can be used to
     /// ensure the state of these queries. A call to sync does not return until all previous writes
     /// to the table are persisted.
-    pub fn sync(self) -> Expr<ObjectOut, Term<(AstT,)>>
+    pub fn sync(self) -> Query<ObjectOut, Term<(AstT,)>>
     where
         OutT: IsTable,
     {
-        Expr::raw(term(term::SYNC, (self.ast,)))
+        Query::raw(term(term::SYNC, (self.ast,)))
     }
 
     /// Get a document by primary key.
-    pub fn get<KeyT: IntoExpr>(
+    pub fn get<KeyT: IntoQuery>(
         self,
         key: KeyT,
-    ) -> Expr<SingleSelectionOut<ObjectOut>, Term<(AstT, KeyT::Ast)>>
+    ) -> Query<SingleSelectionOut<ObjectOut>, Term<(AstT, KeyT::Ast)>>
     where
         OutT: IsTable,
         KeyT::Out: IsKey,
     {
-        Expr::raw(term(term::GET, (self.ast, key.into_ast())))
+        Query::raw(term(term::GET, (self.ast, key.into_ast())))
     }
 
     /// Get all documents where the given value matches the value of the requested index.
     pub fn get_all<KeyT: IsIndexKey, ArgsAstT, KeysT: Into<Args<KeyT, ArgsAstT>>>(
         self,
         key: KeysT,
-    ) -> Expr<SelectionOut<ObjectOut>, Term<(AstT, ArgsAstT), GetAllOptions>>
+    ) -> Query<SelectionOut<ObjectOut>, Term<(AstT, ArgsAstT), GetAllOptions>>
     where
         OutT: IsTable,
     {
-        Expr::raw(term(term::GET_ALL, (self.ast, key.into().ast)))
+        Query::raw(term(term::GET_ALL, (self.ast, key.into().ast)))
     }
 
     /// Get all documents between two keys. Accepts three options: `index`, `left_bound`, and
@@ -267,11 +269,11 @@ impl<OutT, AstT> Expr<OutT, AstT> {
         self,
         min: MinT,
         max: MaxT,
-    ) -> Expr<SelectionOut<ObjectOut>, Term<(AstT, MinT::Ast, MaxT::Ast), BetweenOptions>>
+    ) -> Query<SelectionOut<ObjectOut>, Term<(AstT, MinT::Ast, MaxT::Ast), BetweenOptions>>
     where
         OutT: IsTable,
     {
-        Expr::raw(term(
+        Query::raw(term(
             term::BETWEEN,
             (self.ast, min.into_ast(), max.into_ast()),
         ))
@@ -279,27 +281,27 @@ impl<OutT, AstT> Expr<OutT, AstT> {
 
     /// Sets the `index` option for operations that support it (e.g. `between`, `get_all` etc.),
     /// expects a string, the name of the secondary index.
-    pub fn in_index<NameT>(self, index: NameT) -> Expr<OutT, AstT::WithOption>
+    pub fn in_index<NameT>(self, index: NameT) -> Query<OutT, AstT::WithOption>
     where
         AstT: WithOption<IndexOption, NameT>,
     {
-        Expr::raw(self.ast.with_option(index))
+        Query::raw(self.ast.with_option(index))
     }
 
     /// Sets the `left_bound` option for `between`, expects a string: "closed" or "open".
-    pub fn with_left_bound<BoundT>(self, bound: BoundT) -> Expr<OutT, AstT::WithOption>
+    pub fn with_left_bound<BoundT>(self, bound: BoundT) -> Query<OutT, AstT::WithOption>
     where
         AstT: WithOption<LeftBoundOption, BoundT>,
     {
-        Expr::raw(self.ast.with_option(bound))
+        Query::raw(self.ast.with_option(bound))
     }
 
     /// Sets the `right_bound` option for `between`, expects a string: "closed" or "open".
-    pub fn with_right_bound<BoundT>(self, bound: BoundT) -> Expr<OutT, AstT::WithOption>
+    pub fn with_right_bound<BoundT>(self, bound: BoundT) -> Query<OutT, AstT::WithOption>
     where
         AstT: WithOption<RightBoundOption, BoundT>,
     {
-        Expr::raw(self.ast.with_option(bound))
+        Query::raw(self.ast.with_option(bound))
     }
 
     /// Return all the elements in a sequence for which the given predicate is true. The return
@@ -312,15 +314,15 @@ impl<OutT, AstT> Expr<OutT, AstT> {
     pub fn filter<ReturnT, FilterT>(
         self,
         filter: FilterT,
-    ) -> Expr<OutT, Term<(AstT, FilterT::FunctionAst)>>
+    ) -> Query<OutT, Term<(AstT, FilterT::FunctionAst)>>
     where
         OutT: IsSequence,
-        ReturnT: IntoExpr,
+        ReturnT: IntoQuery,
         ReturnT::Out: IsBool,
         FilterT: FnOnce(Var<OutT::SequenceItem>) -> ReturnT
-            + IntoFunctionExpr<(OutT::SequenceItem,), BoolOut>,
+            + IntoFunctionQuery<(OutT::SequenceItem,), BoolOut>,
     {
-        Expr::raw(term(
+        Query::raw(term(
             term::FILTER,
             (self.ast, filter.into_function_expr().ast),
         ))
@@ -332,12 +334,12 @@ impl<OutT, AstT> Expr<OutT, AstT> {
 
     /// Used to 'zip' up the result of a join by merging the 'right' fields into 'left' fields of
     /// each member of the sequence.
-    pub fn zip(self) -> Expr<ObjectOut, Term<(AstT,)>>
+    pub fn zip(self) -> Query<ObjectOut, Term<(AstT,)>>
     where
         OutT: IsSequence,
         OutT::SequenceItem: IsObject,
     {
-        Expr::raw(term(term::ZIP, (self.ast,)))
+        Query::raw(term(term::ZIP, (self.ast,)))
     }
 
     /// Transform each element of one or more sequences by applying a mapping function to them. If
@@ -348,14 +350,14 @@ impl<OutT, AstT> Expr<OutT, AstT> {
     pub fn map<ReturnT, MapT>(
         self,
         map: MapT,
-    ) -> Expr<OutT::Rebound, Term<(AstT, MapT::FunctionAst)>>
+    ) -> Query<OutT::Rebound, Term<(AstT, MapT::FunctionAst)>>
     where
         OutT: Rebind<ReturnT::Out>,
-        ReturnT: IntoExpr,
+        ReturnT: IntoQuery,
         MapT: FnOnce(Var<OutT::SequenceItem>) -> ReturnT
-            + IntoFunctionExpr<(OutT::SequenceItem,), ReturnT::Out>,
+            + IntoFunctionQuery<(OutT::SequenceItem,), ReturnT::Out>,
     {
-        Expr::raw(term(term::MAP, (self.ast, map.into_function_expr().ast)))
+        Query::raw(term(term::MAP, (self.ast, map.into_function_expr().ast)))
     }
 
     /// Plucks one or more attributes from a sequence of objects, filtering out any objects in the
@@ -364,28 +366,28 @@ impl<OutT, AstT> Expr<OutT, AstT> {
     pub fn with_fields<SelectorT, ArgsAstT, SelectorsT>(
         self,
         selectors: SelectorsT,
-    ) -> Expr<OutT::Rebound, Term<(AstT, ArgsAstT)>>
+    ) -> Query<OutT::Rebound, Term<(AstT, ArgsAstT)>>
     where
         OutT: Rebind<ObjectOut>,
         SelectorT: IsSelector,
         SelectorsT: Into<Args<SelectorT, ArgsAstT>>,
     {
-        Expr::raw(term(term::WITH_FIELDS, (self.ast, selectors.into().ast)))
+        Query::raw(term(term::WITH_FIELDS, (self.ast, selectors.into().ast)))
     }
 
     /// Concatenate one or more elements into a single sequence using a mapping function.
     pub fn concat_map<ReturnT, MapT>(
         self,
         concat_map: MapT,
-    ) -> Expr<OutT::Rebound, Term<(AstT, MapT::FunctionAst)>>
+    ) -> Query<OutT::Rebound, Term<(AstT, MapT::FunctionAst)>>
     where
         OutT: Rebind<<ReturnT::Out as IsSequence>::SequenceItem>,
-        ReturnT: IntoExpr,
+        ReturnT: IntoQuery,
         ReturnT::Out: IsSequence,
         MapT: FnOnce(Var<OutT::SequenceItem>) -> ReturnT
-            + IntoFunctionExpr<(OutT::SequenceItem,), ReturnT::Out>,
+            + IntoFunctionQuery<(OutT::SequenceItem,), ReturnT::Out>,
     {
-        Expr::raw(term(
+        Query::raw(term(
             term::CONCAT_MAP,
             (self.ast, concat_map.into_function_expr().ast),
         ))
@@ -394,30 +396,30 @@ impl<OutT, AstT> Expr<OutT, AstT> {
     // FIXME: implement order_by
 
     /// Skip a number of elements from the head of the sequence.
-    pub fn skip<NumT>(self, n: NumT) -> Expr<OutT, Term<(AstT, NumT::Ast)>>
+    pub fn skip<NumT>(self, n: NumT) -> Query<OutT, Term<(AstT, NumT::Ast)>>
     where
-        NumT: IntoExpr<Out=NumberOut>,
+        NumT: IntoQuery<Out = NumberOut>,
         OutT: IsSequence,
     {
-        Expr::raw(term(term::SKIP, (self.ast, n.into_ast())))
+        Query::raw(term(term::SKIP, (self.ast, n.into_ast())))
     }
 
     /// End the sequence after the given number of elements.
-    pub fn limit<NumT>(self, n: NumT) -> Expr<OutT, Term<(AstT, NumT::Ast)>>
+    pub fn limit<NumT>(self, n: NumT) -> Query<OutT, Term<(AstT, NumT::Ast)>>
     where
-        NumT: IntoExpr<Out=NumberOut>,
+        NumT: IntoQuery<Out = NumberOut>,
         OutT: IsSequence,
     {
-        Expr::raw(term(term::LIMIT, (self.ast, n.into_ast())))
+        Query::raw(term(term::LIMIT, (self.ast, n.into_ast())))
     }
 
     /// Return the elements of a sequence within the specified range.
-    pub fn slice_after<NumT>(self, start: NumT) -> Expr<OutT, Term<(AstT, NumT::Ast)>>
+    pub fn slice_after<NumT>(self, start: NumT) -> Query<OutT, Term<(AstT, NumT::Ast)>>
     where
-        NumT: IntoExpr<Out=NumberOut>,
+        NumT: IntoQuery<Out = NumberOut>,
         OutT: IsSequence,
     {
-        Expr::raw(term(term::SLICE, (self.ast, start.into_ast())))
+        Query::raw(term(term::SLICE, (self.ast, start.into_ast())))
     }
 
     /// Return the elements of a sequence within the specified range.
@@ -426,13 +428,13 @@ impl<OutT, AstT> Expr<OutT, AstT> {
         self,
         start: StartT,
         end: EndT,
-    ) -> Expr<OutT, Term<(AstT, StartT::Ast, EndT::Ast)>>
+    ) -> Query<OutT, Term<(AstT, StartT::Ast, EndT::Ast)>>
     where
-        StartT: IntoExpr<Out=NumberOut>,
-        EndT: IntoExpr<Out=NumberOut>,
+        StartT: IntoQuery<Out = NumberOut>,
+        EndT: IntoQuery<Out = NumberOut>,
         OutT: IsSequence,
     {
-        Expr::raw(term(
+        Query::raw(term(
             term::SLICE,
             (self.ast, start.into_ast(), end.into_ast()),
         ))
@@ -440,22 +442,22 @@ impl<OutT, AstT> Expr<OutT, AstT> {
 
     /// Get the nth element of a sequence, counting from zero. If the argument is negative, count
     /// from the last element.
-    pub fn nth<NumT>(self, n: NumT) -> Expr<OutT::Select, Term<(AstT, NumT::Ast)>>
+    pub fn nth<NumT>(self, n: NumT) -> Query<OutT::Select, Term<(AstT, NumT::Ast)>>
     where
-        NumT: IntoExpr<Out=NumberOut>,
+        NumT: IntoQuery<Out = NumberOut>,
         OutT: IsSequence,
     {
-        Expr::raw(term(term::NTH, (self.ast, n.into_ast())))
+        Query::raw(term(term::NTH, (self.ast, n.into_ast())))
     }
 
     // FIXME: Implement offsets_of.
 
     // FIXME: Implement is_empty.
-    pub fn is_empty(self) -> Expr<BoolOut, Term<(AstT,)>>
+    pub fn is_empty(self) -> Query<BoolOut, Term<(AstT,)>>
     where
         OutT: IsSequence,
     {
-        Expr::raw(term(term::IS_EMPTY, (self.ast,)))
+        Query::raw(term(term::IS_EMPTY, (self.ast,)))
     }
 
     // FIXME: Implement union.
@@ -467,55 +469,55 @@ impl<OutT, AstT> Expr<OutT, AstT> {
     // FIXME: Implement fold.
 
     // FIXME: Implement sum.
-    pub fn sum(self) -> Expr<NumberOut, Term<(AstT,)>>
+    pub fn sum(self) -> Query<NumberOut, Term<(AstT,)>>
     where
         OutT: IsSequence,
         OutT::SequenceItem: IsNumber,
     {
-        Expr::raw(term(term::SUM, (self.ast,)))
+        Query::raw(term(term::SUM, (self.ast,)))
     }
 
     // FIXME: Implement avg.
-    pub fn avg(self) -> Expr<NumberOut, Term<(AstT,)>>
+    pub fn avg(self) -> Query<NumberOut, Term<(AstT,)>>
     where
         OutT: IsSequence,
         OutT::SequenceItem: IsNumber,
     {
-        Expr::raw(term(term::AVG, (self.ast,)))
+        Query::raw(term(term::AVG, (self.ast,)))
     }
 
     // FIXME: Implement min.
-    pub fn min(self) -> Expr<OutT::SequenceItem, Term<(AstT,)>>
+    pub fn min(self) -> Query<OutT::SequenceItem, Term<(AstT,)>>
     where
         OutT: IsSequence,
     {
-        Expr::raw(term(term::MIN, (self.ast,)))
+        Query::raw(term(term::MIN, (self.ast,)))
     }
 
     // FIXME: Implement max.
-    pub fn max(self) -> Expr<OutT::SequenceItem, Term<(AstT,)>>
+    pub fn max(self) -> Query<OutT::SequenceItem, Term<(AstT,)>>
     where
         OutT: IsSequence,
     {
-        Expr::raw(term(term::MAX, (self.ast,)))
+        Query::raw(term(term::MAX, (self.ast,)))
     }
 
     // FIXME: Implement distinct.
-    pub fn distinct(self) -> Expr<OutT, Term<(AstT,)>>
+    pub fn distinct(self) -> Query<OutT, Term<(AstT,)>>
     where
         OutT: IsSequence,
     {
-        Expr::raw(term(term::DISTINCT, (self.ast,)))
+        Query::raw(term(term::DISTINCT, (self.ast,)))
     }
 
     // FIXME: Implement contains.
-    pub fn contains<ValueT>(self, value: ValueT) -> Expr<BoolOut, Term<(AstT, ValueT::Ast)>>
+    pub fn contains<ValueT>(self, value: ValueT) -> Query<BoolOut, Term<(AstT, ValueT::Ast)>>
     where
         OutT: IsSequence,
         OutT::SequenceItem: IsEqualComparable<ValueT::Out>,
-        ValueT: IntoExpr,
+        ValueT: IntoQuery,
     {
-        Expr::raw(term(term::CONTAINS, (self.ast, value.into_ast())))
+        Query::raw(term(term::CONTAINS, (self.ast, value.into_ast())))
     }
 
     // FIXME: Implement r.row implicit var functions.
@@ -533,29 +535,32 @@ impl<OutT, AstT> Expr<OutT, AstT> {
 
     /// Get a single field from an object. If called on a sequence, gets that field from every
     /// object in the sequence, skipping objects that lack it.
-    pub fn get_field<KeyT: IntoExpr<Out=StringOut>>(
+    pub fn get_field<KeyT: IntoQuery<Out = StringOut>>(
         self,
         key: KeyT,
-    ) -> Expr<OutT::AnyOrAnySequence, Term<(AstT, KeyT::Ast)>>
+    ) -> Query<OutT::AnyOrAnySequence, Term<(AstT, KeyT::Ast)>>
     where
         OutT: IsObjectOrObjectSequence,
     {
-        Expr::raw(term(term::GET_FIELD, (self.ast, key.into_ast())))
+        Query::raw(term(term::GET_FIELD, (self.ast, key.into_ast())))
     }
 
     /// Alias for `get_field`.
-    pub fn g<KeyT: IntoExpr<Out=StringOut>>(
+    pub fn g<KeyT: IntoQuery<Out = StringOut>>(
         self,
         key: KeyT,
-    ) -> Expr<OutT::AnyOrAnySequence, Term<(AstT, KeyT::Ast)>>
+    ) -> Query<OutT::AnyOrAnySequence, Term<(AstT, KeyT::Ast)>>
     where
         OutT: IsObjectOrObjectSequence,
     {
-        Expr::raw(term(term::GET_FIELD, (self.ast, key.into_ast())))
+        Query::raw(term(term::GET_FIELD, (self.ast, key.into_ast())))
     }
 
     /// Alias for `get_field` that asserts the result is a object.
-    pub fn get_object<KeyT: IntoExpr<Out=StringOut>>(self, key: KeyT) -> Expr<ObjectOut, Term<(AstT, KeyT::Ast)>>
+    pub fn get_object<KeyT: IntoQuery<Out = StringOut>>(
+        self,
+        key: KeyT,
+    ) -> Query<ObjectOut, Term<(AstT, KeyT::Ast)>>
     where
         OutT: IsObjectOrObjectSequence,
     {
@@ -579,113 +584,92 @@ impl<OutT, AstT> Expr<OutT, AstT> {
 
     /// Sum two or more numbers, or concatenate two or more strings or arrays.
     /// FIXME: Support more args.
-    pub fn add<OtherT>(
-        self,
-        other: OtherT,
-    ) -> Expr<OutT::Output, Term<(AstT, OtherT::Ast)>>
+    pub fn add<OtherT>(self, other: OtherT) -> Query<OutT::Output, Term<(AstT, OtherT::Ast)>>
     where
         OutT: CanAdd<OtherT::Out>,
-        OtherT: IntoExpr,
+        OtherT: IntoQuery,
     {
-        Expr::raw(term(term::ADD, (self.ast, other.into_ast())))
+        Query::raw(term(term::ADD, (self.ast, other.into_ast())))
     }
 
     // FIXME: Implement sub
-    pub fn sub<OtherT>(
-        self,
-        other: OtherT,
-    ) -> Expr<NumberOut, Term<(AstT, OtherT::Ast)>>
+    pub fn sub<OtherT>(self, other: OtherT) -> Query<NumberOut, Term<(AstT, OtherT::Ast)>>
     where
         OutT: IsNumber,
         OtherT::Out: IsNumber,
-        OtherT: IntoExpr,
+        OtherT: IntoQuery,
     {
-        Expr::raw(term(term::SUB, (self.ast, other.into_ast())))
+        Query::raw(term(term::SUB, (self.ast, other.into_ast())))
     }
 
     // FIXME: Implement mul
-    pub fn mul<OtherT>(
-        self,
-        other: OtherT,
-    ) -> Expr<NumberOut, Term<(AstT, OtherT::Ast)>>
+    pub fn mul<OtherT>(self, other: OtherT) -> Query<NumberOut, Term<(AstT, OtherT::Ast)>>
     where
         OutT: IsNumber,
         OtherT::Out: IsNumber,
-        OtherT: IntoExpr,
+        OtherT: IntoQuery,
     {
-        Expr::raw(term(term::MUL, (self.ast, other.into_ast())))
+        Query::raw(term(term::MUL, (self.ast, other.into_ast())))
     }
 
     // FIXME: Implement div
-    pub fn div<OtherT>(
-        self,
-        other: OtherT,
-    ) -> Expr<NumberOut, Term<(AstT, OtherT::Ast)>>
+    pub fn div<OtherT>(self, other: OtherT) -> Query<NumberOut, Term<(AstT, OtherT::Ast)>>
     where
         OutT: IsNumber,
         OtherT::Out: IsNumber,
-        OtherT: IntoExpr,
+        OtherT: IntoQuery,
     {
-        Expr::raw(term(term::DIV, (self.ast, other.into_ast())))
+        Query::raw(term(term::DIV, (self.ast, other.into_ast())))
     }
 
     // FIXME: Implement mod
-    pub fn modulo<OtherT>(
-        self,
-        other: OtherT,
-    ) -> Expr<NumberOut, Term<(AstT, OtherT::Ast)>>
+    pub fn modulo<OtherT>(self, other: OtherT) -> Query<NumberOut, Term<(AstT, OtherT::Ast)>>
     where
         OutT: IsNumber,
         OtherT::Out: IsNumber,
-        OtherT: IntoExpr,
+        OtherT: IntoQuery,
     {
-        Expr::raw(term(term::MOD, (self.ast, other.into_ast())))
+        Query::raw(term(term::MOD, (self.ast, other.into_ast())))
     }
 
     // FIXME: Implement and
-    pub fn and<OtherT>(
-        self,
-        other: OtherT,
-    ) -> Expr<BoolOut, Term<(AstT, OtherT::Ast)>>
+    pub fn and<OtherT>(self, other: OtherT) -> Query<BoolOut, Term<(AstT, OtherT::Ast)>>
     where
         OutT: IsBool,
         OtherT::Out: IsBool,
-        OtherT: IntoExpr,
+        OtherT: IntoQuery,
     {
-        Expr::raw(term(term::AND, (self.ast, other.into_ast())))
+        Query::raw(term(term::AND, (self.ast, other.into_ast())))
     }
 
     // FIXME: Implement or
-    pub fn or<OtherT>(
-        self,
-        other: OtherT,
-    ) -> Expr<BoolOut, Term<(AstT, OtherT::Ast)>>
+    pub fn or<OtherT>(self, other: OtherT) -> Query<BoolOut, Term<(AstT, OtherT::Ast)>>
     where
         OutT: IsBool,
         OtherT::Out: IsBool,
-        OtherT: IntoExpr,
+        OtherT: IntoQuery,
     {
-        Expr::raw(term(term::OR, (self.ast, other.into_ast())))
+        Query::raw(term(term::OR, (self.ast, other.into_ast())))
     }
 
     /// Test if two or more values are equal.
     /// FIXME: Support more args.
-    pub fn eq<OtherT>(self, other: OtherT) -> Expr<BoolOut, Term<(AstT, OtherT::Ast)>>
+    pub fn eq<OtherT>(self, other: OtherT) -> Query<BoolOut, Term<(AstT, OtherT::Ast)>>
     where
         OutT: IsEqualComparable<OtherT::Out>,
-        OtherT: IntoExpr,
+        OtherT: IntoQuery,
     {
-        Expr::raw(term(term::EQ, (self.ast, other.into_ast())))
+        Query::raw(term(term::EQ, (self.ast, other.into_ast())))
     }
 
     /// Test if two or more values are not equal.
     /// FIXME: Support more args.
-    pub fn ne<OtherT>(self, other: OtherT) -> Expr<BoolOut, Term<(AstT, OtherT::Ast)>>
+    pub fn ne<OtherT>(self, other: OtherT) -> Query<BoolOut, Term<(AstT, OtherT::Ast)>>
     where
         OutT: IsEqualComparable<OtherT::Out>,
-        OtherT: IntoExpr,
+        OtherT: IntoQuery,
     {
-        Expr::raw(term(term::NE, (self.ast, other.into_ast())))
+        Query::raw(term(term::NE, (self.ast, other.into_ast())))
     }
 
     // FIXME: Implement gt
@@ -740,24 +724,27 @@ impl<OutT, AstT> Expr<OutT, AstT> {
     // FIXME: Implement status
     // FIXME: Implement wait
 
-    pub fn as_number(self) -> Expr<NumberOut, AstT> {
-        Expr::raw(self.ast)
+    pub fn as_number(self) -> Query<NumberOut, AstT> {
+        Query::raw(self.ast)
     }
 
-    pub fn as_string(self) -> Expr<StringOut, AstT> {
-        Expr::raw(self.ast)
+    pub fn as_string(self) -> Query<StringOut, AstT> {
+        Query::raw(self.ast)
     }
 
-    pub fn as_bool(self) -> Expr<BoolOut, AstT> {
-        Expr::raw(self.ast)
+    pub fn as_bool(self) -> Query<BoolOut, AstT> {
+        Query::raw(self.ast)
     }
 
-    pub fn as_object(self) -> Expr<ObjectOut, AstT> {
-        Expr::raw(self.ast)
+    pub fn as_object(self) -> Query<ObjectOut, AstT> {
+        Query::raw(self.ast)
     }
 
-    pub fn items_as<OtherT>(self) -> Expr<OutT::Rebound, AstT> where OutT: Rebind<OtherT> {
-        Expr::raw(self.ast)
+    pub fn items_as<OtherT>(self) -> Query<OutT::Rebound, AstT>
+    where
+        OutT: Rebind<OtherT>,
+    {
+        Query::raw(self.ast)
     }
 }
 
@@ -767,11 +754,11 @@ pub struct Args<OfT, AstT> {
     _phantom: PhantomData<*const OfT>,
 }
 
-impl<ExprT> From<ExprT> for Args<ExprT::Out, ExprT::Ast>
+impl<QueryT> From<QueryT> for Args<QueryT::Out, QueryT::Ast>
 where
-    ExprT: IntoExpr,
+    QueryT: IntoQuery,
 {
-    fn from(expr: ExprT) -> Self {
+    fn from(expr: QueryT) -> Self {
         Args {
             ast: expr.into_ast(),
             _phantom: PhantomData,
@@ -779,26 +766,24 @@ where
     }
 }
 
-
-impl<OutT, AstT> Expr<OutT, AstT> {
+impl<OutT, AstT> Query<OutT, AstT> {
     fn raw(ast: AstT) -> Self {
-        Expr {
+        Query {
             ast,
             _phantom: PhantomData,
         }
     }
 }
 
-impl<OutT, AstT: Serialize> Serialize for Expr<OutT, AstT> {
+impl<OutT, AstT: Serialize> Serialize for Query<OutT, AstT> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         self.ast.serialize(serializer)
     }
 }
 
-impl<OutT, AstT: Serialize> IntoExpr for Expr<OutT, AstT> {
+impl<OutT, AstT: Serialize> IntoQuery for Query<OutT, AstT> {
     type Out = OutT;
 }
-
 
 #[derive(Copy, Clone, Debug, Serialize)]
 pub struct Term<ArgsT, OptionsT: Options = NoOptions>(
@@ -806,7 +791,6 @@ pub struct Term<ArgsT, OptionsT: Options = NoOptions>(
     ArgsT,
     #[serde(skip_serializing_if = "Options::all_unset")] OptionsT,
 );
-
 
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct Null;
@@ -821,15 +805,15 @@ pub trait IntoAst: Sized {
     fn into_ast(self) -> Self::Ast;
 }
 
-pub trait IntoExpr: IntoAst {
+pub trait IntoQuery: IntoAst {
     type Out;
 
-    fn into_expr(self) -> Expr<Self::Out, Self::Ast> {
-        Expr::raw(self.into_ast())
+    fn into_expr(self) -> Query<Self::Out, Self::Ast> {
+        Query::raw(self.into_ast())
     }
 }
 
-impl<AstT: Serialize, OutT> IntoAst for Expr<OutT, AstT> {
+impl<AstT: Serialize, OutT> IntoAst for Query<OutT, AstT> {
     type Ast = AstT;
     fn into_ast(self) -> Self::Ast {
         self.ast
@@ -856,10 +840,10 @@ macro_rules! impl_datum {
                 }
             }
 
-            impl IntoExpr for $rust {
+            impl IntoQuery for $rust {
                 type Out = $output;
             }
-            impl<'a> IntoExpr for &'a $rust {
+            impl<'a> IntoQuery for &'a $rust {
                 type Out = $output;
             }
          )+
@@ -871,7 +855,7 @@ macro_rules! impl_datum {
                 self
             }
         }
-        impl<'a> IntoExpr for &'a $rust {
+        impl<'a> IntoQuery for &'a $rust {
             type Out = $output;
         }
     };
@@ -897,7 +881,7 @@ macro_rules! impl_datum_fixed_array {
                 }
             }
 
-            impl<OfT: IntoExpr> IntoExpr for [OfT; $len] {
+            impl<OfT: IntoQuery> IntoQuery for [OfT; $len] {
                 type Out = ArrayOut<OfT::Out>;
             }
          )+
@@ -919,7 +903,7 @@ macro_rules! impl_datum_tuple {
             }
         }
 
-        impl<$head, $($tail),*> IntoExpr for ($head, $($tail),*)
+        impl<$head, $($tail),*> IntoQuery for ($head, $($tail),*)
             where $head: IntoAst, $($tail: IntoAst),*
         {
             type Out = ArrayOut<AnyOut>;
@@ -960,8 +944,8 @@ impl IntoAst for MaxVal {
 pub trait MinLimitFor<OutT>: IntoAst {}
 pub trait MaxLimitFor<OutT>: IntoAst {}
 
-impl<ExprT: IntoExpr> MinLimitFor<ExprT::Out> for ExprT {}
-impl<ExprT: IntoExpr> MaxLimitFor<ExprT::Out> for ExprT {}
+impl<QueryT: IntoQuery> MinLimitFor<QueryT::Out> for QueryT {}
+impl<QueryT: IntoQuery> MaxLimitFor<QueryT::Out> for QueryT {}
 
 impl<OutT> MinLimitFor<OutT> for MinVal {}
 impl<OutT> MaxLimitFor<OutT> for MaxVal {}
@@ -1110,11 +1094,9 @@ impl IsEqualComparable<BoolOut> for BoolOut {}
 impl IsEqualComparable<NumberOut> for NumberOut {}
 impl IsEqualComparable<StringOut> for StringOut {}
 impl IsEqualComparable<ObjectOut> for ObjectOut {}
-impl<WithT, OfT> IsEqualComparable<ArrayOut<WithT>> for ArrayOut<OfT>
-where
-    OfT: IsEqualComparable<WithT>,
-{
-}
+impl<WithT, OfT> IsEqualComparable<ArrayOut<WithT>> for ArrayOut<OfT> where
+    OfT: IsEqualComparable<WithT>
+{}
 
 pub trait IsSelection<OfT> {}
 impl<OfT> IsSelection<OfT> for SelectionOut<OfT> {}
@@ -1134,33 +1116,35 @@ impl<WithT, OfT> CanAdd<ArrayOut<WithT>> for ArrayOut<OfT> {
     type Output = ArrayOut<AnyOut>;
 }
 
-pub type Var<OutT> = Expr<OutT, Term<(usize,)>>;
+pub type Var<OutT> = Query<OutT, Term<(usize,)>>;
 
 const NEXT_VAR_ID: AtomicUsize = ATOMIC_USIZE_INIT;
 fn fresh_var<OutT>() -> Var<OutT> {
-    Expr::raw(term(
+    Query::raw(term(
         term::VAR,
         (NEXT_VAR_ID.fetch_add(1, Ordering::SeqCst),),
     ))
 }
 
-pub trait IntoFunctionExpr<ArgsT, ReturnT> {
+pub trait IntoFunctionQuery<ArgsT, ReturnT> {
     type FunctionAst;
 
-    fn into_function_expr(self) -> Expr<FunctionOut<ArgsT, ReturnT>, Self::FunctionAst>;
+    fn into_function_expr(self) -> Query<FunctionOut<ArgsT, ReturnT>, Self::FunctionAst>;
 }
 
-impl<Arg1T, ReturnRawT, FunctionT> IntoFunctionExpr<(Arg1T,), ReturnRawT::Out> for FunctionT
+impl<Arg1T, ReturnRawT, FunctionT> IntoFunctionQuery<(Arg1T,), ReturnRawT::Out> for FunctionT
 where
     FunctionT: FnOnce(Var<Arg1T>) -> ReturnRawT,
-    ReturnRawT: IntoExpr,
+    ReturnRawT: IntoQuery,
 {
     type FunctionAst = Term<(Term<(usize,)>, ReturnRawT::Ast)>;
 
-    fn into_function_expr(self) -> Expr<FunctionOut<(Arg1T,), ReturnRawT::Out>, Self::FunctionAst> {
+    fn into_function_expr(
+        self,
+    ) -> Query<FunctionOut<(Arg1T,), ReturnRawT::Out>, Self::FunctionAst> {
         let var = fresh_var();
         let var_id = (var.ast.1).0;
-        Expr::raw(term(
+        Query::raw(term(
             term::FUNC,
             (term(term::MAKE_ARRAY, (var_id,)), (self)(var).into_ast()),
         ))
@@ -1187,7 +1171,7 @@ impl OptionValue for () {
     }
 }
 
-impl<OutT, AstT: Serialize> OptionValue for Expr<OutT, AstT> {
+impl<OutT, AstT: Serialize> OptionValue for Query<OutT, AstT> {
     fn is_unset(&self) -> bool {
         false
     }
@@ -1225,7 +1209,8 @@ impl Options for NoOptions {
 
 #[derive(Copy, Clone, Debug, Serialize, Default)]
 pub struct GetAllOptions<IndexT: OptionValue = ()> {
-    #[serde(skip_serializing_if = "OptionValue::is_unset")] index: IndexT,
+    #[serde(skip_serializing_if = "OptionValue::is_unset")]
+    index: IndexT,
 }
 
 impl<IndexT: OptionValue> Options for GetAllOptions<IndexT> {
@@ -1234,8 +1219,8 @@ impl<IndexT: OptionValue> Options for GetAllOptions<IndexT> {
     }
 }
 
-impl<NameT: IntoExpr<Out=StringOut>> WithOption<IndexOption, NameT> for GetAllOptions<()> {
-    type WithOption = GetAllOptions<Expr<StringOut, NameT::Ast>>;
+impl<NameT: IntoQuery<Out = StringOut>> WithOption<IndexOption, NameT> for GetAllOptions<()> {
+    type WithOption = GetAllOptions<Query<StringOut, NameT::Ast>>;
 
     fn with_option(self, value: NameT) -> Self::WithOption {
         GetAllOptions {
@@ -1250,24 +1235,26 @@ pub struct BetweenOptions<
     LeftBoundT: OptionValue = (),
     RightBoundT: OptionValue = (),
 > {
-    #[serde(skip_serializing_if = "OptionValue::is_unset")] index: IndexT,
-    #[serde(skip_serializing_if = "OptionValue::is_unset")] left_bound: LeftBoundT,
-    #[serde(skip_serializing_if = "OptionValue::is_unset")] right_bound: RightBoundT,
+    #[serde(skip_serializing_if = "OptionValue::is_unset")]
+    index: IndexT,
+    #[serde(skip_serializing_if = "OptionValue::is_unset")]
+    left_bound: LeftBoundT,
+    #[serde(skip_serializing_if = "OptionValue::is_unset")]
+    right_bound: RightBoundT,
 }
 
 impl<IndexT: OptionValue, LeftBoundT: OptionValue, RightBoundT: OptionValue> Options
-    for BetweenOptions<IndexT, LeftBoundT, RightBoundT> {
+    for BetweenOptions<IndexT, LeftBoundT, RightBoundT>
+{
     fn all_unset(&self) -> bool {
         self.index.is_unset() && self.left_bound.is_unset() && self.right_bound.is_unset()
     }
 }
 
-impl<
-    NameT: IntoExpr<Out=StringOut>,
-    LeftBoundT: OptionValue,
-    RightBoundT: OptionValue,
-> WithOption<IndexOption, NameT> for BetweenOptions<(), LeftBoundT, RightBoundT> {
-    type WithOption = BetweenOptions<Expr<StringOut, NameT::Ast>, LeftBoundT, RightBoundT>;
+impl<NameT: IntoQuery<Out = StringOut>, LeftBoundT: OptionValue, RightBoundT: OptionValue>
+    WithOption<IndexOption, NameT> for BetweenOptions<(), LeftBoundT, RightBoundT>
+{
+    type WithOption = BetweenOptions<Query<StringOut, NameT::Ast>, LeftBoundT, RightBoundT>;
 
     fn with_option(self, value: NameT) -> Self::WithOption {
         BetweenOptions {
@@ -1279,12 +1266,10 @@ impl<
 }
 
 // FIXME: Should use `IsString` rather than StringOut
-impl<
-    IndexT: OptionValue,
-    LeftBoundT: IntoExpr<Out=StringOut>,
-    RightBoundT: OptionValue,
-> WithOption<LeftBoundOption, LeftBoundT> for BetweenOptions<IndexT, (), RightBoundT> {
-    type WithOption = BetweenOptions<IndexT, Expr<StringOut, LeftBoundT::Ast>, RightBoundT>;
+impl<IndexT: OptionValue, LeftBoundT: IntoQuery<Out = StringOut>, RightBoundT: OptionValue>
+    WithOption<LeftBoundOption, LeftBoundT> for BetweenOptions<IndexT, (), RightBoundT>
+{
+    type WithOption = BetweenOptions<IndexT, Query<StringOut, LeftBoundT::Ast>, RightBoundT>;
 
     fn with_option(self, value: LeftBoundT) -> Self::WithOption {
         BetweenOptions {
@@ -1295,12 +1280,10 @@ impl<
     }
 }
 
-impl<
-    IndexT: OptionValue,
-    LeftBoundT: OptionValue,
-    RightBoundT: IntoExpr<Out=StringOut>,
-> WithOption<RightBoundOption, RightBoundT> for BetweenOptions<IndexT, LeftBoundT, ()> {
-    type WithOption = BetweenOptions<IndexT, LeftBoundT, Expr<StringOut, RightBoundT::Ast>>;
+impl<IndexT: OptionValue, LeftBoundT: OptionValue, RightBoundT: IntoQuery<Out = StringOut>>
+    WithOption<RightBoundOption, RightBoundT> for BetweenOptions<IndexT, LeftBoundT, ()>
+{
+    type WithOption = BetweenOptions<IndexT, LeftBoundT, Query<StringOut, RightBoundT::Ast>>;
 
     fn with_option(self, value: RightBoundT) -> Self::WithOption {
         BetweenOptions {

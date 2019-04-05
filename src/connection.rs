@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::str::{self, FromStr};
 use std::sync::atomic::{AtomicUsize, Ordering, ATOMIC_USIZE_INIT};
 
+#[derive(Debug)]
 pub struct Connection {
     raw: RawConnection,
     connection_id: ConnectionId,
@@ -28,15 +29,37 @@ impl Connection {
         }
     }
 
-    pub fn run<QueryT: Serialize>(&mut self, query: QueryT) -> Result<Cursor> {
+    pub fn run<PayloadT: DeserializeOwned, QueryT: Serialize>(
+        &mut self,
+        wait: Wait,
+        query: QueryT,
+    ) -> Result<PayloadT> {
+        let mut cursor = self.run_cursor(query)?;
+        let item = self
+            .next_impl(UnwrapAtom::Yes, wait, &mut cursor)?
+            .ok_or(ErrorKind::IteratorTimeout.into());
+        if cursor.exhausted {
+            item
+        } else {
+            Err(ErrorKind::UnexpectedResponse.into())
+        }
+    }
+
+    pub fn run_cursor<QueryT: Serialize>(&mut self, query: QueryT) -> Result<Cursor> {
         Ok(Cursor {
             token: self.raw.start_request(query)?,
             connection_id: self.connection_id,
-            num_resets: 0,
+            num_resets: self.num_resets,
             buffer: None,
             position: 0,
             exhausted: false,
         })
+    }
+
+    pub fn invalidate(&mut self) {
+        self.reset();
+        self.connection_id = ConnectionId::new();
+        self.num_resets = 0;
     }
 
     pub fn is_open(&mut self) -> bool {
@@ -47,8 +70,26 @@ impl Connection {
         self.raw.close()
     }
 
-    pub fn next<PayloadT: DeserializeOwned>(
+    pub fn next_batch<PayloadT: DeserializeOwned>(
         &mut self,
+        wait: Wait,
+        cursor: &mut Cursor,
+    ) -> Result<PayloadT> {
+        self.next_batch_or_none(wait, cursor)?
+            .ok_or(ErrorKind::IteratorTimeout.into())
+    }
+
+    pub fn next_batch_or_none<PayloadT: DeserializeOwned>(
+        &mut self,
+        wait: Wait,
+        cursor: &mut Cursor,
+    ) -> Result<Option<PayloadT>> {
+        self.next_impl(UnwrapAtom::No, wait, cursor)
+    }
+
+    fn next_impl<PayloadT: DeserializeOwned>(
+        &mut self,
+        unwrap_atom: UnwrapAtom,
         wait: Wait,
         cursor: &mut Cursor,
     ) -> Result<Option<PayloadT>> {
@@ -75,7 +116,7 @@ impl Connection {
             if size > buffer.len() {
                 Err(ErrorKind::Connection("Buffer underrun.".into()).into())
             } else {
-                match extract_from_response(&buffer[content_start..content_end]) {
+                match extract_from_response(&buffer[content_start..content_end], unwrap_atom) {
                     Ok((payload, complete)) => {
                         if complete == Complete::Yes {
                             cursor.exhausted = true;
@@ -124,14 +165,18 @@ impl Connection {
             }
             Err(error) => {
                 reclaim(&mut self.buffers, buffer);
-                for (_, mut buffer) in self.responses.drain() {
-                    buffer.clear();
-                    reclaim(&mut self.buffers, buffer);
-                }
-                self.num_resets += 1;
+                self.reset();
                 Err(error.into())
             }
         }
+    }
+
+    fn reset(&mut self) {
+        for (_, mut buffer) in self.responses.drain() {
+            buffer.clear();
+            reclaim(&mut self.buffers, buffer);
+        }
+        self.num_resets += 1;
     }
 }
 
@@ -141,8 +186,15 @@ enum Complete {
     No,
 }
 
+#[derive(PartialEq, Eq)]
+enum UnwrapAtom {
+    Yes,
+    No,
+}
+
 fn extract_from_response<PayloadT: DeserializeOwned>(
     buffer: &[u8],
+    unwrap_atom: UnwrapAtom,
 ) -> Result<(PayloadT, Complete)> {
     debug!("Response: {}", String::from_utf8_lossy(buffer));
     if !buffer.starts_with(RESPONSE_PREFIX) {
@@ -172,20 +224,24 @@ fn extract_from_response<PayloadT: DeserializeOwned>(
             .context(ErrorKind::Connection("invalid utf-8 in response".into()))?,
     ).context(ErrorKind::Connection("response type not a number".into()))?;
     match response_type {
-        SUCCESS_ATOM => {
-            let response: AtomResponse<PayloadT> =
-                serde_json::from_slice(buffer).context(ErrorKind::UnexpectedResponse)?;
-            Ok((response.payload.0, Complete::Yes))
-        }
-        SUCCESS_PARTIAL => {
-            let response: SequenceResponse<PayloadT> =
-                serde_json::from_slice(buffer).context(ErrorKind::UnexpectedResponse)?;
-            Ok((response.payload, Complete::No))
-        }
-        SUCCESS_SEQUENCE => {
-            let response: SequenceResponse<PayloadT> =
-                serde_json::from_slice(buffer).context(ErrorKind::UnexpectedResponse)?;
-            Ok((response.payload, Complete::Yes))
+        SUCCESS_ATOM | SUCCESS_PARTIAL | SUCCESS_SEQUENCE => {
+            let complete = if response_type == SUCCESS_PARTIAL {
+                Complete::No
+            } else {
+                Complete::Yes
+            };
+            let payload = if response_type == SUCCESS_ATOM && unwrap_atom == UnwrapAtom::Yes {
+                let response: AtomResponse<PayloadT> =
+                    serde_json::from_slice(buffer).context(ErrorKind::UnexpectedResponse)?;
+                response.payload.0
+            } else if unwrap_atom == UnwrapAtom::Yes {
+                return Err(ErrorKind::UnexpectedResponse.into());
+            } else {
+                let response: SequenceResponse<PayloadT> =
+                    serde_json::from_slice(buffer).context(ErrorKind::UnexpectedResponse)?;
+                response.payload
+            };
+            Ok((payload, complete))
         }
         CLIENT_ERROR | RUNTIME_ERROR | COMPILE_ERROR => {
             let response: ErrorResponse = serde_json::from_slice(buffer).context(
@@ -246,6 +302,7 @@ struct ErrorResponse {
     message: (Box<str>,),
 }
 
+#[derive(Debug)]
 pub struct Cursor {
     token: Token,
     connection_id: ConnectionId,
@@ -253,6 +310,12 @@ pub struct Cursor {
     buffer: Option<Vec<u8>>,
     position: usize,
     num_resets: usize,
+}
+
+impl Cursor {
+    pub fn exhausted(&self) -> bool {
+        self.exhausted
+    }
 }
 
 fn reclaim(buffers: &mut Vec<Vec<u8>>, buffer: Vec<u8>) {

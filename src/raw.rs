@@ -10,6 +10,7 @@ use std::time::Duration;
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub struct Token(pub u64);
 
+#[derive(Debug)]
 pub struct RawConnection {
     endpoint: SocketAddr,
     tcp: BufReader<TcpStream>,
@@ -153,7 +154,7 @@ impl RawConnection {
         debug!("Received header: {:?}", header);
 
         match header_read_result {
-            Err(ref error) if error.kind() == IoErrorKind::TimedOut => {
+            Err(ref error) if error.kind() == IoErrorKind::WouldBlock => {
                 return Ok(None);
             }
             result @ _ => result.context(ErrorKind::Connection("failed to read header".into()))?,
@@ -208,13 +209,13 @@ fn handshake(endpoint: &SocketAddr) -> Result<BufReader<TcpStream>> {
     }
 }
 
-#[derive(Serialize, Default)]
+#[derive(Debug, Serialize, Default)]
 pub struct GlobalOptions {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub read_mode: Option<ReadMode>,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 pub enum ReadMode {
     #[serde(rename = "single")]
     Single,
@@ -224,6 +225,7 @@ pub enum ReadMode {
     Outdated,
 }
 
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum Wait {
     Yes,
     No,
